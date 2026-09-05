@@ -17,6 +17,7 @@ public final class SkysoftSessionReader {
     private static final String PRESET_CLASS = "com.skysoft.features.profit.ProfitTrackerPreset";
 
     private static boolean methodDebugPrinted = false;
+    private static boolean fallbackDebugPrinted = false;
 
     private SkysoftSessionReader() {}
 
@@ -48,25 +49,52 @@ public final class SkysoftSessionReader {
             double itemValue = 0.0;
             long valuedItems = 0L;
             long pricedItemTypes = 0L;
+            long skysoftPricedTypes = 0L;
+            long fallbackPricedTypes = 0L;
+            double fallbackValue = 0.0;
             boolean hadItems = !items.isEmpty();
 
             for (Map.Entry<String, Long> entry : items.entrySet()) {
+                String itemId = entry.getKey();
+                long count = entry.getValue();
+                if (count <= 0) continue;
+
+                Double unitValue = null;
+                boolean usedFallback = false;
+
                 try {
-                    Double unitValue = skysoftUnitValue(trackerClass, tracker, target, entry.getKey());
-                    if (unitValue != null && Double.isFinite(unitValue)) {
-                        itemValue += unitValue * entry.getValue();
-                        valuedItems += entry.getValue();
-                        pricedItemTypes++;
+                    unitValue = skysoftUnitValue(trackerClass, tracker, target, itemId);
+                } catch (Throwable ignored) {
+                    // Skysoft could not price this item. Try the independent Hypixel
+                    // NPC/Bazaar resolver below instead of dropping its value.
+                }
+
+                if (unitValue == null || !Double.isFinite(unitValue) || unitValue <= 0.0) {
+                    double fallback = ItemPriceResolver.value(itemId);
+                    if (Double.isFinite(fallback) && fallback > 0.0) {
+                        unitValue = fallback;
+                        usedFallback = true;
+                        fallbackPricedTypes++;
+                        fallbackValue += fallback * count;
                     }
-                } catch (Throwable itemError) {
-                    // One unknown/unpriced item must not destroy the entire tracker.
-                    // Skysoft itself also ignores items for which no usable price exists.
+                } else {
+                    skysoftPricedTypes++;
+                }
+
+                if (unitValue != null && Double.isFinite(unitValue) && unitValue > 0.0) {
+                    itemValue += unitValue * count;
+                    valuedItems += count;
+                    pricedItemTypes++;
+                }
+
+                if (usedFallback && !fallbackDebugPrinted) {
+                    fallbackDebugPrinted = true;
+                    System.out.println("[TastyFish] ItemPriceResolver fallback is being used for Skysoft-unpriced items.");
                 }
             }
 
-            // If Skysoft has tracked items but none could be valued, do not upload a
-            // fabricated zero. The caller will keep the last server value intact and
-            // retry on the next interval.
+            // If Skysoft has tracked items but none can be valued by either Skysoft
+            // or the fallback resolver, do not upload a fabricated zero.
             if (hadItems && pricedItemTypes == 0L) {
                 return Snapshot.invalid();
             }
@@ -75,6 +103,13 @@ public final class SkysoftSessionReader {
             double profit = itemValue + coins - coinCosts;
 
             if (!Double.isFinite(profit)) return Snapshot.invalid();
+
+            if (fallbackPricedTypes > 0) {
+                System.out.println("[TastyFish] Farming valuation: Skysoft types=" + skysoftPricedTypes
+                    + ", fallback types=" + fallbackPricedTypes
+                    + ", fallback value=" + Math.round(fallbackValue)
+                    + ", total profit=" + Math.round(profit));
+            }
 
             return new Snapshot(
                 items,
@@ -113,7 +148,6 @@ public final class SkysoftSessionReader {
             FARMING
         );
 
-        // Normal Kotlin data-object companion path.
         try {
             Field companionField = findField(targetClass, "Companion");
             companionField.setAccessible(true);
@@ -128,7 +162,6 @@ public final class SkysoftSessionReader {
             // Fall through to constructor-based Kotlin fallback.
         }
 
-        // Fallback for a compiler/version where the companion helper is not exposed.
         for (Constructor<?> constructor : targetClass.getDeclaredConstructors()) {
             Class<?>[] parameters = constructor.getParameterTypes();
             if (parameters.length == 2 && parameters[0].isAssignableFrom(presetClass)
@@ -167,7 +200,6 @@ public final class SkysoftSessionReader {
             if (targetCompatible && stringCompatible) candidates.add(method);
         }
 
-        // Also inspect inherited/public methods in case Skysoft exposes a bridge method.
         for (Method method : trackerClass.getMethods()) {
             if (!containsSameMethod(candidates, method)) {
                 String name = method.getName();
