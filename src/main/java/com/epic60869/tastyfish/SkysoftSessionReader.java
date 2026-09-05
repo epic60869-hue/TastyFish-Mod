@@ -13,11 +13,6 @@ public final class SkysoftSessionReader {
 
     private SkysoftSessionReader() {}
 
-    /**
-     * Reads Skysoft's actual Farming SESSION tracker directly.
-     * TastyFish does not maintain a second farming tracker; it reads Skysoft's
-     * own sessionStats and uses Skysoft's own unitValue() pricing method.
-     */
     public static Snapshot read() {
         try {
             Class<?> trackerClass = Class.forName(PROFIT_TRACKER_CLASS);
@@ -77,11 +72,22 @@ public final class SkysoftSessionReader {
 
     private static Double skysoftUnitValue(Class<?> trackerClass, Object tracker, Object target, String itemId)
         throws ReflectiveOperationException {
-        Class<?> targetClass = Class.forName(TARGET_CLASS);
-        Method unitValue = trackerClass.getDeclaredMethod("unitValue", targetClass, String.class);
-        unitValue.setAccessible(true);
-        Object result = unitValue.invoke(tracker, target, itemId);
-        return result instanceof Number number ? number.doubleValue() : null;
+        // Skysoft has changed the exact JVM signature of this Kotlin-internal
+        // helper between releases. Find the real method instead of assuming
+        // getDeclaredMethod() can resolve it from the source signature.
+        Class<?> current = trackerClass;
+        while (current != null) {
+            for (Method method : current.getDeclaredMethods()) {
+                if (!method.getName().equals("unitValue") || method.getParameterCount() != 2) continue;
+                Class<?>[] parameters = method.getParameterTypes();
+                if (!parameters[1].equals(String.class) || !parameters[0].isInstance(target)) continue;
+                method.setAccessible(true);
+                Object result = method.invoke(tracker, target, itemId);
+                return result instanceof Number number ? number.doubleValue() : null;
+            }
+            current = current.getSuperclass();
+        }
+        throw new NoSuchMethodException("No compatible ProfitTracker.unitValue method found");
     }
 
     private static Map<String, Long> longMap(Object object, String fieldName) throws ReflectiveOperationException {
