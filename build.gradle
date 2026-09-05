@@ -10,9 +10,9 @@ base {
     archivesName = project.archives_base_name
 }
 
+// Fabric Loom adds the essential Minecraft and library repositories automatically.
+// Keep this block empty unless the mod needs an additional third-party repository.
 repositories {
-    mavenCentral()
-    maven { url = 'https://maven.fabricmc.net/' }
 }
 
 dependencies {

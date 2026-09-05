@@ -27,20 +27,22 @@ public final class TastyFishMod implements ClientModInitializer {
         System.out.println("[TastyFish] Farming leaderboard uploader loaded.");
     }
 
+    private void startNewSession() {
+        sessionId = FarmingUploader.newSessionId();
+        lastActiveMillis = -1L;
+        uploader.resetAuthentication();
+    }
+
     private void tick(Minecraft minecraft) {
         boolean connected = minecraft.player != null;
         if (!connected) {
-            if (wasConnected) {
-                sessionId = FarmingUploader.newSessionId();
-                lastActiveMillis = -1L;
-            }
+            if (wasConnected) startNewSession();
             wasConnected = false;
             return;
         }
 
         if (!wasConnected) {
-            sessionId = FarmingUploader.newSessionId();
-            lastActiveMillis = -1L;
+            startNewSession();
             lastUploadMillis = 0L;
             wasConnected = true;
         }
@@ -55,7 +57,7 @@ public final class TastyFishMod implements ClientModInitializer {
         // activeMillis is therefore treated as a new client-side session so the server
         // never mistakes the reset value for negative progress in the old session.
         if (lastActiveMillis >= 0L && snapshot.activeMillis() < lastActiveMillis) {
-            sessionId = FarmingUploader.newSessionId();
+            startNewSession();
         }
         lastActiveMillis = snapshot.activeMillis();
 

@@ -11,8 +11,8 @@ import java.nio.file.Path;
 public final class TastyFishConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    public String endpoint = "https://shadowisabot.com/api/farming/update";
-    public String apiKey = "PUT_YOUR_FARMING_API_KEY_HERE";
+    public String authEndpoint = "https://shadowisabot.com/api/farming/auth";
+    public String updateEndpoint = "https://shadowisabot.com/api/farming/update";
     public int uploadIntervalSeconds = 30;
     public boolean enabled = true;
 
