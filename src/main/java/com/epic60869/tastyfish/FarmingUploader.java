@@ -8,6 +8,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -23,6 +24,7 @@ public final class FarmingUploader {
     private volatile String tokenUsername;
     private volatile String tokenUuid;
     private volatile String tokenSessionId;
+    private volatile String baselinedSessionId;
     private volatile long authBlockedUntil;
     private volatile long authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
     private final AtomicBoolean authenticationInProgress = new AtomicBoolean(false);
@@ -30,6 +32,7 @@ public final class FarmingUploader {
     public void upload(TastyFishConfig config, String username, String uuid, String profile, String sessionId,
                        SkysoftSessionReader.Snapshot snapshot) {
         if (!config.enabled || config.endpoint.isBlank()) return;
+        if (!snapshot.valid()) return;
         if (username == null || username.isBlank() || uuid == null || uuid.isBlank() || sessionId == null || sessionId.isBlank()) {
             System.err.println("[TastyFish] Farming upload skipped: missing username, UUID, or session ID.");
             return;
@@ -83,7 +86,16 @@ public final class FarmingUploader {
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
 
                         System.out.println("[TastyFish] Farming authentication successful.");
-                        sendUpdate(config, username, uuid, profile, sessionId, snapshot, false);
+
+                        // The backend intentionally baselines the first update for a
+                        // session. Send a zero snapshot once, then the real Skysoft total
+                        // on the next interval. This makes an already-running Skysoft
+                        // session (e.g. 350k profit) appear on the leaderboard without
+                        // double-counting it on ordinary reconnects.
+                        if (!sessionId.equals(baselinedSessionId)) {
+                            sendBaseline(config, username, uuid, profile, sessionId);
+                            baselinedSessionId = sessionId;
+                        }
                     } else if (response.statusCode() == 429) {
                         long retryMs = retryAfterMillis(response);
                         authBlockedUntil = System.currentTimeMillis() + retryMs;
@@ -113,6 +125,22 @@ public final class FarmingUploader {
         }
     }
 
+    private void sendBaseline(TastyFishConfig config, String username, String uuid, String profile, String sessionId) {
+        JsonObject root = new JsonObject();
+        root.addProperty("username", username);
+        root.addProperty("uuid", uuid);
+        root.addProperty("profile", profile == null ? "" : profile);
+        root.addProperty("preset", "FARMING");
+        root.addProperty("profit", 0.0);
+        root.addProperty("activeMillis", 0L);
+        root.addProperty("actions", 0L);
+        root.addProperty("sessionId", sessionId);
+        root.add("items", GSON.toJsonTree(Map.of()));
+        root.add("pests", GSON.toJsonTree(Map.of()));
+
+        sendJson(config, root, username, uuid, profile, sessionId, false, true);
+    }
+
     private void sendUpdate(TastyFishConfig config, String username, String uuid, String profile,
                             String sessionId, SkysoftSessionReader.Snapshot snapshot, boolean retry) {
         JsonObject root = new JsonObject();
@@ -127,6 +155,11 @@ public final class FarmingUploader {
         root.add("items", GSON.toJsonTree(snapshot.items()));
         root.add("pests", GSON.toJsonTree(snapshot.pests()));
 
+        sendJson(config, root, username, uuid, profile, sessionId, retry, false);
+    }
+
+    private void sendJson(TastyFishConfig config, JsonObject root, String username, String uuid, String profile,
+                          String sessionId, boolean retry, boolean baseline) {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(config.endpoint))
             .timeout(Duration.ofSeconds(15))
@@ -138,14 +171,15 @@ public final class FarmingUploader {
 
         client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenAccept(response -> {
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                System.out.println("[TastyFish] Farming update uploaded: " + response.body());
+                System.out.println("[TastyFish] Farming " + (baseline ? "baseline" : "update") + " uploaded: " + response.body());
             } else if (response.statusCode() == 401 && !retry) {
                 token = null;
                 tokenUsername = null;
                 tokenUuid = null;
                 tokenSessionId = null;
                 System.out.println("[TastyFish] Farming token expired. Re-authenticating...");
-                authenticate(config, username, uuid, sessionId, snapshot, profile);
+                if (!baseline) authenticate(config, username, uuid, sessionId,
+                    SkysoftSessionReader.read(), profile);
             } else if (response.statusCode() == 429) {
                 long retryMs = retryAfterMillis(response);
                 authBlockedUntil = System.currentTimeMillis() + retryMs;
@@ -167,7 +201,6 @@ public final class FarmingUploader {
                 long seconds = Long.parseLong(retryAfter);
                 if (seconds >= 0) return Math.min(seconds * 1000L, MAX_AUTH_BACKOFF_MS);
             } catch (NumberFormatException ignored) {
-                // Fall back to exponential client-side backoff.
             }
         }
         return authBackoffMs;
