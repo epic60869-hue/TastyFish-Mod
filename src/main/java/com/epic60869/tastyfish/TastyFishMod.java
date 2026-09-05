@@ -43,6 +43,10 @@ public final class TastyFishMod implements ClientModInitializer {
             lastActiveMillis = -1L;
             lastUploadMillis = 0L;
             wasConnected = true;
+
+            // Check once per game launch. The checker only reports a newer
+            // released Skysoft version compatible with this Minecraft version.
+            SkysoftVersionChecker.check(minecraft);
         }
 
         long now = System.currentTimeMillis();
@@ -51,7 +55,7 @@ public final class TastyFishMod implements ClientModInitializer {
 
         SkysoftSessionReader.Snapshot snapshot = SkysoftSessionReader.read();
 
-        // SkySoft clears its session tracker on profile changes/disconnects. A drop in
+        // Skysoft clears its session tracker on profile changes/disconnects. A drop in
         // activeMillis is therefore treated as a new client-side session so the server
         // never mistakes the reset value for negative progress in the old session.
         if (lastActiveMillis >= 0L && snapshot.activeMillis() < lastActiveMillis) {
