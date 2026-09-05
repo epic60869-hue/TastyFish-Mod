@@ -8,23 +8,19 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class SkysoftVersionChecker {
     private static final String MODRINTH_VERSIONS_URL = "https://api.modrinth.com/v2/project/skysoft/version";
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
-    private static final HttpClient HTTP = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(5))
-        .build();
+    private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
     private SkysoftVersionChecker() {}
 
@@ -33,7 +29,6 @@ public final class SkysoftVersionChecker {
 
         String current = installedSkysoftVersion();
         if (current == null || current.isBlank()) return;
-
         String minecraftVersion = installedMinecraftVersion();
         if (minecraftVersion == null || minecraftVersion.isBlank()) return;
 
@@ -53,12 +48,10 @@ public final class SkysoftVersionChecker {
             .thenApply(body -> findNewestCompatibleRelease(body, minecraftVersion))
             .thenAccept(latest -> {
                 if (latest == null || compareVersions(latest, current) <= 0) return;
-
                 minecraft.execute(() -> {
                     if (minecraft.player == null) return;
-                    minecraft.player.displayClientMessage(
-                        Component.literal("§e[TastyFish] §cSkysoft outdated §7(" + current + ") §f-> §a" + latest),
-                        false
+                    minecraft.gui.getChat().addClientSystemMessage(
+                        Component.literal("§e[TastyFish] §cSkysoft outdated §7(" + current + ") §f-> §a" + latest)
                     );
                 });
             })
@@ -69,58 +62,42 @@ public final class SkysoftVersionChecker {
     }
 
     private static String installedSkysoftVersion() {
-        return FabricLoader.getInstance()
-            .getModContainer("skysoft")
-            .map(container -> container.getMetadata().getVersion().getFriendlyString())
-            .orElse(null);
+        return FabricLoader.getInstance().getModContainer("skysoft")
+            .map(container -> container.getMetadata().getVersion().getFriendlyString()).orElse(null);
     }
 
     private static String installedMinecraftVersion() {
-        return FabricLoader.getInstance()
-            .getModContainer("minecraft")
-            .map(container -> container.getMetadata().getVersion().getFriendlyString())
-            .orElse(null);
+        return FabricLoader.getInstance().getModContainer("minecraft")
+            .map(container -> container.getMetadata().getVersion().getFriendlyString()).orElse(null);
     }
 
     private static String findNewestCompatibleRelease(String body, String minecraftVersion) {
         JsonArray versions = JsonParser.parseString(body).getAsJsonArray();
         List<String> candidates = new ArrayList<>();
-
         for (JsonElement element : versions) {
             if (!element.isJsonObject()) continue;
             JsonObject version = element.getAsJsonObject();
-
             String status = version.has("status") ? version.get("status").getAsString() : "";
             if (!"release".equalsIgnoreCase(status)) continue;
-
             if (!contains(version.getAsJsonArray("game_versions"), minecraftVersion)) continue;
             if (!containsIgnoreCase(version.getAsJsonArray("loaders"), "fabric")) continue;
-
-            if (version.has("version_number")) {
-                candidates.add(version.get("version_number").getAsString());
-            }
+            if (version.has("version_number")) candidates.add(version.get("version_number").getAsString());
         }
-
         return candidates.stream().max(SkysoftVersionChecker::compareVersions).orElse(null);
     }
 
     private static boolean contains(JsonArray array, String wanted) {
         if (array == null) return false;
-        for (JsonElement element : array) {
-            if (wanted.equals(element.getAsString())) return true;
-        }
+        for (JsonElement element : array) if (wanted.equals(element.getAsString())) return true;
         return false;
     }
 
     private static boolean containsIgnoreCase(JsonArray array, String wanted) {
         if (array == null) return false;
-        for (JsonElement element : array) {
-            if (wanted.equalsIgnoreCase(element.getAsString())) return true;
-        }
+        for (JsonElement element : array) if (wanted.equalsIgnoreCase(element.getAsString())) return true;
         return false;
     }
 
-    /** Compares numeric version components while tolerating v-prefixes/build suffixes. */
     private static int compareVersions(String left, String right) {
         List<Integer> a = numericParts(left);
         List<Integer> b = numericParts(right);
@@ -139,9 +116,8 @@ public final class SkysoftVersionChecker {
         StringBuilder number = new StringBuilder();
         for (int i = 0; i < version.length(); i++) {
             char c = version.charAt(i);
-            if (Character.isDigit(c)) {
-                number.append(c);
-            } else if (!number.isEmpty()) {
+            if (Character.isDigit(c)) number.append(c);
+            else if (!number.isEmpty()) {
                 parts.add(parsePart(number));
                 number.setLength(0);
             }
