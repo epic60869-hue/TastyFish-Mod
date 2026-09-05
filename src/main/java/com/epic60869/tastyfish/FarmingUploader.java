@@ -23,6 +23,11 @@ public final class FarmingUploader {
     private volatile String accessToken = null;
     private volatile long tokenExpiresAtMillis = 0L;
 
+    public void resetAuthentication() {
+        accessToken = null;
+        tokenExpiresAtMillis = 0L;
+    }
+
     public void upload(TastyFishConfig config, String username, String uuid, String profile, String sessionId,
                        SkysoftSessionReader.Snapshot snapshot) {
         if (!config.enabled || config.authEndpoint.isBlank() || config.updateEndpoint.isBlank()) return;
@@ -119,8 +124,7 @@ public final class FarmingUploader {
         client.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .thenAccept(response -> {
                 if (response.statusCode() == 401) {
-                    accessToken = null;
-                    tokenExpiresAtMillis = 0L;
+                    resetAuthentication();
                     return;
                 }
                 if (response.statusCode() == 429) {
