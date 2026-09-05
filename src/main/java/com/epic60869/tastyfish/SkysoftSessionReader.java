@@ -1,8 +1,6 @@
 package com.epic60869.tastyfish;
 
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -36,12 +34,14 @@ public final class SkysoftSessionReader {
             long actions = longField(stats, "actions");
             double coins = doubleField(stats, "coins");
 
+            // Profit is deliberately calculated outside SkySoft's private
+            // valuation method. This makes the leaderboard deterministic:
+            // NPC sell price is always preferred, with Bazaar as the fallback
+            // for items that do not have an NPC sell price.
             double itemValue = 0.0;
             for (Map.Entry<String, Long> entry : items.entrySet()) {
-                Double value = unitValue(tracker, entry.getKey());
-                if (value != null) {
-                    itemValue += value * entry.getValue();
-                }
+                double value = ItemPriceResolver.value(entry.getKey());
+                itemValue += value * entry.getValue();
             }
 
             double profit = itemValue + coins;
@@ -50,28 +50,6 @@ public final class SkysoftSessionReader {
         } catch (Throwable error) {
             System.err.println("[TastyFish] Failed to read SkySoft farming session: " + rootMessage(error));
             return Snapshot.empty();
-        }
-    }
-
-    private static Double unitValue(Object tracker, String itemId) {
-        try {
-            Class<?> targetClass = Class.forName("com.skysoft.features.profit.ProfitTrackerTarget");
-            Class<?> presetClass = Class.forName("com.skysoft.features.profit.ProfitTrackerPreset");
-
-            @SuppressWarnings({"rawtypes", "unchecked"})
-            Object farmingPreset = Enum.valueOf((Class) presetClass, FARMING);
-
-            Constructor<?> constructor = targetClass.getDeclaredConstructor(presetClass, String.class);
-            constructor.setAccessible(true);
-            Object target = constructor.newInstance(farmingPreset, null);
-
-            Method method = tracker.getClass().getDeclaredMethod("unitValue", targetClass, String.class);
-            method.setAccessible(true);
-            Object result = method.invoke(tracker, target, itemId);
-
-            return result instanceof Number number ? number.doubleValue() : null;
-        } catch (Throwable error) {
-            return null;
         }
     }
 
