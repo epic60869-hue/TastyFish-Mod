@@ -44,9 +44,8 @@ public final class TastyFishMod implements ClientModInitializer {
             lastUploadMillis = 0L;
             wasConnected = true;
 
-            // Check once per game launch. The checker only reports a newer
-            // released Skysoft version compatible with this Minecraft version.
-            SkysoftVersionChecker.check(minecraft);
+            // Check once per game launch for a newer released TastyFish version.
+            TastyFishVersionChecker.check(minecraft);
         }
 
         long now = System.currentTimeMillis();
