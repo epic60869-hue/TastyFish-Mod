@@ -50,7 +50,7 @@ public final class SkysoftVersionChecker {
                 if (latest == null || compareVersions(latest, current) <= 0) return;
                 minecraft.execute(() -> {
                     if (minecraft.player == null) return;
-                    minecraft.gui.getChat().addClientSystemMessage(
+                    minecraft.gui.chat.addClientSystemMessage(
                         Component.literal("§e[TastyFish] §cSkysoft outdated §7(" + current + ") §f-> §a" + latest)
                     );
                 });
