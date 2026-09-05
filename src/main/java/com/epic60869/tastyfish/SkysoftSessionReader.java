@@ -13,16 +13,10 @@ public final class SkysoftSessionReader {
 
     private SkysoftSessionReader() {}
 
-    /**
-     * Reads the same Farming SESSION stats used by Skysoft's Profit Tracker HUD.
-     * When Skysoft is installed, TastyFish deliberately uses Skysoft's own
-     * unitValue() method rather than maintaining a second price calculation.
-     */
     public static Snapshot read() {
         try {
             Class<?> trackerClass = Class.forName(PROFIT_TRACKER_CLASS);
-            Field instanceField = trackerClass.getField("INSTANCE");
-            Object tracker = instanceField.get(null);
+            Object tracker = trackerClass.getField("INSTANCE").get(null);
 
             if (!(tracker instanceof SkysoftProfitTrackerAccessor accessor)) {
                 System.err.println("[TastyFish] Skysoft ProfitTracker was found, but the TastyFish accessor mixin is not applied.");
@@ -31,7 +25,6 @@ public final class SkysoftSessionReader {
 
             Map<String, ?> statsMap = accessor.tastyfish$getSessionStats();
             if (statsMap == null) return Snapshot.empty();
-
             Object stats = statsMap.get(FARMING);
             if (stats == null) return Snapshot.empty();
 
@@ -45,7 +38,6 @@ public final class SkysoftSessionReader {
             Object target = createFarmingTarget();
             double itemValue = 0.0;
             long valuedItems = 0L;
-
             for (Map.Entry<String, Long> entry : items.entrySet()) {
                 Double unitValue = skysoftUnitValue(trackerClass, tracker, target, entry.getKey());
                 if (unitValue != null && Double.isFinite(unitValue)) {
@@ -54,10 +46,9 @@ public final class SkysoftSessionReader {
                 }
             }
 
-            // This matches ProfitTrackerHud's calculation:
-            // revenue = valued item totals + stats.coins
-            // profit = revenue - coin costs
-            double coinCosts = costs.getOrDefault("COINS", 0L).doubleValue();
+            // Matches ProfitTrackerHud: revenue = valued item totals + coins,
+            // then subtract only the "Coins" cost bucket.
+            double coinCosts = costs.getOrDefault("Coins", 0L).doubleValue();
             double profit = itemValue + coins - coinCosts;
 
             return new Snapshot(items, pests, activeMillis, actions, coins, profit, valuedItems);
@@ -72,19 +63,13 @@ public final class SkysoftSessionReader {
         Class<?> presetClass = Class.forName(PRESET_CLASS);
         @SuppressWarnings("unchecked")
         Object farmingPreset = Enum.valueOf((Class<? extends Enum>) presetClass.asSubclass(Enum.class), FARMING);
-
-        Field companionField = targetClass.getField("Companion");
-        Object companion = companionField.get(null);
+        Object companion = targetClass.getField("Companion").get(null);
         Method presetMethod = companion.getClass().getMethod("preset", presetClass);
         return presetMethod.invoke(companion, farmingPreset);
     }
 
-    private static Double skysoftUnitValue(
-        Class<?> trackerClass,
-        Object tracker,
-        Object target,
-        String itemId
-    ) throws ReflectiveOperationException {
+    private static Double skysoftUnitValue(Class<?> trackerClass, Object tracker, Object target, String itemId)
+        throws ReflectiveOperationException {
         Class<?> targetClass = Class.forName(TARGET_CLASS);
         Method unitValue = trackerClass.getDeclaredMethod("unitValue", targetClass, String.class);
         unitValue.setAccessible(true);
@@ -95,12 +80,10 @@ public final class SkysoftSessionReader {
     private static Map<String, Long> longMap(Object object, String fieldName) throws ReflectiveOperationException {
         Field field = findField(object.getClass(), fieldName);
         field.setAccessible(true);
-
         Object raw = field.get(object);
         if (!(raw instanceof Map<?, ?> source)) {
             throw new IllegalStateException("Skysoft field " + fieldName + " is not a Map");
         }
-
         Map<String, Long> result = new LinkedHashMap<>();
         for (Map.Entry<?, ?> entry : source.entrySet()) {
             if (entry.getKey() instanceof String key && entry.getValue() instanceof Number value) {
@@ -144,9 +127,7 @@ public final class SkysoftSessionReader {
 
     private static String rootMessage(Throwable error) {
         Throwable current = error;
-        while (current.getCause() != null) {
-            current = current.getCause();
-        }
+        while (current.getCause() != null) current = current.getCause();
         String message = current.getMessage();
         return message == null ? current.toString() : message;
     }
