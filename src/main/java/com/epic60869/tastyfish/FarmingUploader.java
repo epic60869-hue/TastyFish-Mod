@@ -13,9 +13,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class FarmingUploader {
     private static final Gson GSON = new Gson();
-    private static final String MOD_VERSION = "1.0.3";
+    private static final String MOD_VERSION = "1.0.4";
     private static final long AUTH_COOLDOWN_MS = 30_000L;
     private static final long AUTH_RATE_LIMIT_BACKOFF_MS = 60_000L;
+    private static final long MAX_AUTH_BACKOFF_MS = 10 * 60_000L;
 
     private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private volatile String token;
@@ -23,6 +24,7 @@ public final class FarmingUploader {
     private volatile String tokenUuid;
     private volatile String tokenSessionId;
     private volatile long authBlockedUntil;
+    private volatile long authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
     private final AtomicBoolean authenticationInProgress = new AtomicBoolean(false);
 
     public void upload(TastyFishConfig config, String username, String uuid, String profile, String sessionId,
@@ -33,7 +35,8 @@ public final class FarmingUploader {
             return;
         }
 
-        if (token == null || !username.equalsIgnoreCase(tokenUsername) || !uuid.equalsIgnoreCase(tokenUuid) || !sessionId.equals(tokenSessionId)) {
+        if (token == null || !username.equalsIgnoreCase(tokenUsername)
+                || !uuid.equalsIgnoreCase(tokenUuid) || !sessionId.equals(tokenSessionId)) {
             authenticate(config, username, uuid, sessionId, snapshot, profile);
             return;
         }
@@ -44,13 +47,8 @@ public final class FarmingUploader {
     private void authenticate(TastyFishConfig config, String username, String uuid, String sessionId,
                               SkysoftSessionReader.Snapshot snapshot, String profile) {
         long now = System.currentTimeMillis();
-        if (now < authBlockedUntil) {
-            return;
-        }
-
-        if (!authenticationInProgress.compareAndSet(false, true)) {
-            return;
-        }
+        if (now < authBlockedUntil) return;
+        if (!authenticationInProgress.compareAndSet(false, true)) return;
 
         try {
             JsonObject body = new JsonObject();
@@ -72,8 +70,8 @@ public final class FarmingUploader {
                     if (response.statusCode() >= 200 && response.statusCode() < 300) {
                         JsonObject json = GSON.fromJson(response.body(), JsonObject.class);
                         if (json == null || !json.has("token")) {
-                            System.err.println("[TastyFish] Farming authentication failed: no token returned.");
                             authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
+                            System.err.println("[TastyFish] Farming authentication failed: no token returned.");
                             return;
                         }
 
@@ -81,13 +79,17 @@ public final class FarmingUploader {
                         tokenUsername = username;
                         tokenUuid = uuid.toLowerCase();
                         tokenSessionId = sessionId;
+                        authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
 
                         System.out.println("[TastyFish] Farming authentication successful.");
                         sendUpdate(config, username, uuid, profile, sessionId, snapshot, false);
                     } else if (response.statusCode() == 429) {
-                        authBlockedUntil = System.currentTimeMillis() + AUTH_RATE_LIMIT_BACKOFF_MS;
-                        System.err.println("[TastyFish] Farming authentication rate limited (429). Backing off for 60 seconds.");
+                        long retryMs = retryAfterMillis(response);
+                        authBlockedUntil = System.currentTimeMillis() + retryMs;
+                        authBackoffMs = Math.min(Math.max(authBackoffMs * 2L, AUTH_RATE_LIMIT_BACKOFF_MS), MAX_AUTH_BACKOFF_MS);
+                        System.err.println("[TastyFish] Farming authentication rate limited (429). Backing off for "
+                            + (retryMs / 1000L) + " seconds.");
                     } else {
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
                         System.err.println("[TastyFish] Farming authentication failed: HTTP " + response.statusCode() + ": " + response.body());
@@ -145,8 +147,10 @@ public final class FarmingUploader {
                 System.out.println("[TastyFish] Farming token expired. Re-authenticating...");
                 authenticate(config, username, uuid, sessionId, snapshot, profile);
             } else if (response.statusCode() == 429) {
-                authBlockedUntil = System.currentTimeMillis() + AUTH_RATE_LIMIT_BACKOFF_MS;
-                System.err.println("[TastyFish] Farming upload rate limited (429). Backing off for 60 seconds.");
+                long retryMs = retryAfterMillis(response);
+                authBlockedUntil = System.currentTimeMillis() + retryMs;
+                System.err.println("[TastyFish] Farming upload rate limited (429). Backing off for "
+                    + (retryMs / 1000L) + " seconds.");
             } else {
                 System.err.println("[TastyFish] Farming upload failed: HTTP " + response.statusCode() + ": " + response.body());
             }
@@ -154,6 +158,19 @@ public final class FarmingUploader {
             System.err.println("[TastyFish] Farming upload failed: " + rootMessage(error));
             return null;
         });
+    }
+
+    private long retryAfterMillis(HttpResponse<?> response) {
+        String retryAfter = response.headers().firstValue("Retry-After").orElse("").trim();
+        if (!retryAfter.isEmpty()) {
+            try {
+                long seconds = Long.parseLong(retryAfter);
+                if (seconds >= 0) return Math.min(seconds * 1000L, MAX_AUTH_BACKOFF_MS);
+            } catch (NumberFormatException ignored) {
+                // Fall back to exponential client-side backoff.
+            }
+        }
+        return authBackoffMs;
     }
 
     private static String authEndpoint(String updateEndpoint) {
