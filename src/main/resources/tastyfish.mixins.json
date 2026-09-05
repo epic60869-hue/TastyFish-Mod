@@ -1,11 +1,5 @@
 {
   "required": false,
   "package": "com.epic60869.tastyfish.mixin",
-  "compatibilityLevel": "JAVA_25",
-  "client": [
-    "SkysoftProfitTrackerMixin"
-  ],
-  "injectors": {
-    "defaultRequire": 1
-  }
+  "compatibilityLevel": "JAVA_25"
 }
