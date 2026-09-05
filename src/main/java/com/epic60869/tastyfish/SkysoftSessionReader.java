@@ -1,6 +1,5 @@
 package com.epic60869.tastyfish;
 
-import com.epic60869.tastyfish.mixin.SkysoftProfitTrackerAccessor;
 import net.minecraft.client.Minecraft;
 
 import java.lang.reflect.Field;
@@ -16,11 +15,14 @@ public final class SkysoftSessionReader {
             Class<?> trackerClass = Class.forName("com.skysoft.features.profit.ProfitTracker");
             Field instanceField = trackerClass.getField("INSTANCE");
             Object tracker = instanceField.get(null);
-            if (!(tracker instanceof SkysoftProfitTrackerAccessor accessor)) {
+
+            Method sessionStatsMethod = tracker.getClass().getMethod("getSessionStats");
+            Object allStats = sessionStatsMethod.invoke(tracker);
+            if (!(allStats instanceof Map<?, ?> statsMap)) {
                 return Snapshot.empty();
             }
 
-            Object stats = accessor.tastyfish$getSessionStats().get("FARMING");
+            Object stats = statsMap.get("FARMING");
             if (stats == null) return Snapshot.empty();
 
             Map<String, Long> items = longMap(stats, "itemCounts");
@@ -61,7 +63,6 @@ public final class SkysoftSessionReader {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static Map<String, Long> longMap(Object object, String fieldName) throws ReflectiveOperationException {
         Field field = object.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
