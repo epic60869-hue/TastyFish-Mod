@@ -13,19 +13,26 @@ public final class SkysoftSessionReader {
 
     private SkysoftSessionReader() {}
 
+    /**
+     * Reads Skysoft's actual Farming SESSION tracker directly.
+     * TastyFish does not maintain a second farming tracker; it reads Skysoft's
+     * own sessionStats and uses Skysoft's own unitValue() pricing method.
+     */
     public static Snapshot read() {
         try {
             Class<?> trackerClass = Class.forName(PROFIT_TRACKER_CLASS);
             Object tracker = trackerClass.getField("INSTANCE").get(null);
 
-            if (!(tracker instanceof SkysoftProfitTrackerAccessor accessor)) {
-                System.err.println("[TastyFish] Skysoft ProfitTracker was found, but the TastyFish accessor mixin is not applied.");
+            Field sessionStatsField = findField(trackerClass, "sessionStats");
+            sessionStatsField.setAccessible(true);
+            Object rawStatsMap = sessionStatsField.get(tracker);
+
+            if (!(rawStatsMap instanceof Map<?, ?> source)) {
+                System.err.println("[TastyFish] Skysoft ProfitTracker sessionStats is not a Map.");
                 return Snapshot.empty();
             }
 
-            Map<String, ?> statsMap = accessor.tastyfish$getSessionStats();
-            if (statsMap == null) return Snapshot.empty();
-            Object stats = statsMap.get(FARMING);
+            Object stats = source.get(FARMING);
             if (stats == null) return Snapshot.empty();
 
             Map<String, Long> items = longMap(stats, "itemCounts");
@@ -38,6 +45,7 @@ public final class SkysoftSessionReader {
             Object target = createFarmingTarget();
             double itemValue = 0.0;
             long valuedItems = 0L;
+
             for (Map.Entry<String, Long> entry : items.entrySet()) {
                 Double unitValue = skysoftUnitValue(trackerClass, tracker, target, entry.getKey());
                 if (unitValue != null && Double.isFinite(unitValue)) {
@@ -46,8 +54,6 @@ public final class SkysoftSessionReader {
                 }
             }
 
-            // Matches ProfitTrackerHud: revenue = valued item totals + coins,
-            // then subtract only the "Coins" cost bucket.
             double coinCosts = costs.getOrDefault("Coins", 0L).doubleValue();
             double profit = itemValue + coins - coinCosts;
 
@@ -63,7 +69,8 @@ public final class SkysoftSessionReader {
         Class<?> presetClass = Class.forName(PRESET_CLASS);
         @SuppressWarnings("unchecked")
         Object farmingPreset = Enum.valueOf((Class<? extends Enum>) presetClass.asSubclass(Enum.class), FARMING);
-        Object companion = targetClass.getField("Companion").get(null);
+        Field companionField = targetClass.getField("Companion");
+        Object companion = companionField.get(null);
         Method presetMethod = companion.getClass().getMethod("preset", presetClass);
         return presetMethod.invoke(companion, farmingPreset);
     }
