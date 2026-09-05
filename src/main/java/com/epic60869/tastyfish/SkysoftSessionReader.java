@@ -1,24 +1,31 @@
 package com.epic60869.tastyfish;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class SkysoftSessionReader {
     private static final String FARMING = "FARMING";
+    private static final String PROFIT_TRACKER_CLASS = "com.skysoft.features.profit.ProfitTracker";
+    private static final String TARGET_CLASS = "com.skysoft.features.profit.ProfitTrackerTarget";
+    private static final String PRESET_CLASS = "com.skysoft.features.profit.ProfitTrackerPreset";
 
     private SkysoftSessionReader() {}
 
+    /**
+     * Reads the same Farming SESSION stats used by Skysoft's Profit Tracker HUD.
+     * When Skysoft is installed, TastyFish deliberately uses Skysoft's own
+     * unitValue() method rather than maintaining a second price calculation.
+     */
     public static Snapshot read() {
         try {
-            Class<?> trackerClass = Class.forName("com.skysoft.features.profit.ProfitTracker");
+            Class<?> trackerClass = Class.forName(PROFIT_TRACKER_CLASS);
             Field instanceField = trackerClass.getField("INSTANCE");
             Object tracker = instanceField.get(null);
 
-            // SkySoft's sessionStats is private. TastyFish exposes it through
-            // SkysoftProfitTrackerMixin instead of relying on a public getter.
             if (!(tracker instanceof SkysoftProfitTrackerAccessor accessor)) {
-                System.err.println("[TastyFish] SkySoft ProfitTracker was found, but the TastyFish accessor mixin is not applied.");
+                System.err.println("[TastyFish] Skysoft ProfitTracker was found, but the TastyFish accessor mixin is not applied.");
                 return Snapshot.empty();
             }
 
@@ -30,27 +37,59 @@ public final class SkysoftSessionReader {
 
             Map<String, Long> items = longMap(stats, "itemCounts");
             Map<String, Long> pests = longMap(stats, "pestKills");
+            Map<String, Long> costs = longMap(stats, "costs");
             long activeMillis = longField(stats, "activeMillis");
             long actions = longField(stats, "actions");
             double coins = doubleField(stats, "coins");
 
-            // Profit is deliberately calculated outside SkySoft's private
-            // valuation method. This makes the leaderboard deterministic:
-            // NPC sell price is always preferred, with Bazaar as the fallback
-            // for items that do not have an NPC sell price.
+            Object target = createFarmingTarget();
             double itemValue = 0.0;
+            long valuedItems = 0L;
+
             for (Map.Entry<String, Long> entry : items.entrySet()) {
-                double value = ItemPriceResolver.value(entry.getKey());
-                itemValue += value * entry.getValue();
+                Double unitValue = skysoftUnitValue(trackerClass, tracker, target, entry.getKey());
+                if (unitValue != null && Double.isFinite(unitValue)) {
+                    itemValue += unitValue * entry.getValue();
+                    valuedItems += entry.getValue();
+                }
             }
 
-            double profit = itemValue + coins;
+            // This matches ProfitTrackerHud's calculation:
+            // revenue = valued item totals + stats.coins
+            // profit = revenue - coin costs
+            double coinCosts = costs.getOrDefault("COINS", 0L).doubleValue();
+            double profit = itemValue + coins - coinCosts;
 
-            return new Snapshot(items, pests, activeMillis, actions, coins, profit);
+            return new Snapshot(items, pests, activeMillis, actions, coins, profit, valuedItems);
         } catch (Throwable error) {
-            System.err.println("[TastyFish] Failed to read SkySoft farming session: " + rootMessage(error));
+            System.err.println("[TastyFish] Failed to read Skysoft farming session: " + rootMessage(error));
             return Snapshot.empty();
         }
+    }
+
+    private static Object createFarmingTarget() throws ReflectiveOperationException {
+        Class<?> targetClass = Class.forName(TARGET_CLASS);
+        Class<?> presetClass = Class.forName(PRESET_CLASS);
+        @SuppressWarnings("unchecked")
+        Object farmingPreset = Enum.valueOf((Class<? extends Enum>) presetClass.asSubclass(Enum.class), FARMING);
+
+        Field companionField = targetClass.getField("Companion");
+        Object companion = companionField.get(null);
+        Method presetMethod = companion.getClass().getMethod("preset", presetClass);
+        return presetMethod.invoke(companion, farmingPreset);
+    }
+
+    private static Double skysoftUnitValue(
+        Class<?> trackerClass,
+        Object tracker,
+        Object target,
+        String itemId
+    ) throws ReflectiveOperationException {
+        Class<?> targetClass = Class.forName(TARGET_CLASS);
+        Method unitValue = trackerClass.getDeclaredMethod("unitValue", targetClass, String.class);
+        unitValue.setAccessible(true);
+        Object result = unitValue.invoke(tracker, target, itemId);
+        return result instanceof Number number ? number.doubleValue() : null;
     }
 
     private static Map<String, Long> longMap(Object object, String fieldName) throws ReflectiveOperationException {
@@ -59,7 +98,7 @@ public final class SkysoftSessionReader {
 
         Object raw = field.get(object);
         if (!(raw instanceof Map<?, ?> source)) {
-            throw new IllegalStateException("SkySoft field " + fieldName + " is not a Map");
+            throw new IllegalStateException("Skysoft field " + fieldName + " is not a Map");
         }
 
         Map<String, Long> result = new LinkedHashMap<>();
@@ -76,7 +115,7 @@ public final class SkysoftSessionReader {
         field.setAccessible(true);
         Object value = field.get(object);
         if (!(value instanceof Number number)) {
-            throw new IllegalStateException("SkySoft field " + fieldName + " is not numeric");
+            throw new IllegalStateException("Skysoft field " + fieldName + " is not numeric");
         }
         return number.longValue();
     }
@@ -86,7 +125,7 @@ public final class SkysoftSessionReader {
         field.setAccessible(true);
         Object value = field.get(object);
         if (!(value instanceof Number number)) {
-            throw new IllegalStateException("SkySoft field " + fieldName + " is not numeric");
+            throw new IllegalStateException("Skysoft field " + fieldName + " is not numeric");
         }
         return number.doubleValue();
     }
@@ -118,10 +157,11 @@ public final class SkysoftSessionReader {
         long activeMillis,
         long actions,
         double coins,
-        double profit
+        double profit,
+        long valuedItems
     ) {
         public static Snapshot empty() {
-            return new Snapshot(Map.of(), Map.of(), 0L, 0L, 0.0, 0.0);
+            return new Snapshot(Map.of(), Map.of(), 0L, 0L, 0.0, 0.0, 0L);
         }
     }
 }
