@@ -8,6 +8,8 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -26,7 +28,6 @@ public final class SkysoftVersionChecker {
 
     public static void check(Minecraft minecraft) {
         if (!STARTED.compareAndSet(false, true)) return;
-
         String current = installedSkysoftVersion();
         if (current == null || current.isBlank()) return;
         String minecraftVersion = installedMinecraftVersion();
@@ -40,25 +41,53 @@ public final class SkysoftVersionChecker {
 
         HTTP.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .thenApply(response -> {
-                if (response.statusCode() != 200) {
-                    throw new IllegalStateException("Modrinth returned HTTP " + response.statusCode());
-                }
+                if (response.statusCode() != 200) throw new IllegalStateException("Modrinth returned HTTP " + response.statusCode());
                 return response.body();
             })
             .thenApply(body -> findNewestCompatibleRelease(body, minecraftVersion))
             .thenAccept(latest -> {
                 if (latest == null || compareVersions(latest, current) <= 0) return;
-                minecraft.execute(() -> {
-                    if (minecraft.player == null) return;
-                    minecraft.gui.chat.addClientSystemMessage(
-                        Component.literal("§e[TastyFish] §cSkysoft outdated §7(" + current + ") §f-> §a" + latest)
-                    );
-                });
+                minecraft.execute(() -> showChatMessage(minecraft, current, latest));
             })
             .exceptionally(error -> {
                 System.out.println("[TastyFish] Skysoft update check failed: " + rootMessage(error));
                 return null;
             });
+    }
+
+    private static void showChatMessage(Minecraft minecraft, String current, String latest) {
+        if (minecraft.player == null) return;
+        Component message = Component.literal("§e[TastyFish] §cSkysoft outdated §7(" + current + ") §f-> §a" + latest);
+        try {
+            Object chat = null;
+            try {
+                Method getter = minecraft.gui.getClass().getMethod("getChat");
+                chat = getter.invoke(minecraft.gui);
+            } catch (NoSuchMethodException ignored) {
+                Field field = findField(minecraft.gui.getClass(), "chat");
+                if (field != null) {
+                    field.setAccessible(true);
+                    chat = field.get(minecraft.gui);
+                }
+            }
+            if (chat == null) throw new IllegalStateException("Minecraft chat component could not be located");
+            Method add = chat.getClass().getMethod("addClientSystemMessage", Component.class);
+            add.invoke(chat, message);
+        } catch (Throwable error) {
+            System.out.println("[TastyFish] Could not display Skysoft update notice: " + rootMessage(error));
+        }
+    }
+
+    private static Field findField(Class<?> type, String name) {
+        Class<?> current = type;
+        while (current != null) {
+            try {
+                return current.getDeclaredField(name);
+            } catch (NoSuchFieldException ignored) {
+                current = current.getSuperclass();
+            }
+        }
+        return null;
     }
 
     private static String installedSkysoftVersion() {
@@ -99,13 +128,10 @@ public final class SkysoftVersionChecker {
     }
 
     private static int compareVersions(String left, String right) {
-        List<Integer> a = numericParts(left);
-        List<Integer> b = numericParts(right);
+        List<Integer> a = numericParts(left), b = numericParts(right);
         int count = Math.max(a.size(), b.size());
         for (int i = 0; i < count; i++) {
-            int av = i < a.size() ? a.get(i) : 0;
-            int bv = i < b.size() ? b.get(i) : 0;
-            int comparison = Integer.compare(av, bv);
+            int comparison = Integer.compare(i < a.size() ? a.get(i) : 0, i < b.size() ? b.get(i) : 0);
             if (comparison != 0) return comparison;
         }
         return 0;
@@ -127,11 +153,8 @@ public final class SkysoftVersionChecker {
     }
 
     private static int parsePart(StringBuilder value) {
-        try {
-            return Integer.parseInt(value.toString());
-        } catch (NumberFormatException ignored) {
-            return Integer.MAX_VALUE;
-        }
+        try { return Integer.parseInt(value.toString()); }
+        catch (NumberFormatException ignored) { return Integer.MAX_VALUE; }
     }
 
     private static String rootMessage(Throwable error) {
