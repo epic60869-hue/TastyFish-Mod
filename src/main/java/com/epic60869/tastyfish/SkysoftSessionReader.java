@@ -1,13 +1,14 @@
 package com.epic60869.tastyfish;
 
-import net.minecraft.client.Minecraft;
-
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class SkysoftSessionReader {
+    private static final String FARMING = "FARMING";
+
     private SkysoftSessionReader() {}
 
     public static Snapshot read() {
@@ -16,13 +17,17 @@ public final class SkysoftSessionReader {
             Field instanceField = trackerClass.getField("INSTANCE");
             Object tracker = instanceField.get(null);
 
-            Method sessionStatsMethod = tracker.getClass().getMethod("getSessionStats");
-            Object allStats = sessionStatsMethod.invoke(tracker);
-            if (!(allStats instanceof Map<?, ?> statsMap)) {
+            // SkySoft's sessionStats is private. TastyFish exposes it through
+            // SkysoftProfitTrackerMixin instead of relying on a public getter.
+            if (!(tracker instanceof SkysoftProfitTrackerAccessor accessor)) {
+                System.err.println("[TastyFish] SkySoft ProfitTracker was found, but the TastyFish accessor mixin is not applied.");
                 return Snapshot.empty();
             }
 
-            Object stats = statsMap.get("FARMING");
+            Map<String, ?> statsMap = accessor.tastyfish$getSessionStats();
+            if (statsMap == null) return Snapshot.empty();
+
+            Object stats = statsMap.get(FARMING);
             if (stats == null) return Snapshot.empty();
 
             Map<String, Long> items = longMap(stats, "itemCounts");
@@ -33,14 +38,17 @@ public final class SkysoftSessionReader {
 
             double itemValue = 0.0;
             for (Map.Entry<String, Long> entry : items.entrySet()) {
-                Double unitValue = unitValue(tracker, entry.getKey());
-                if (unitValue != null) {
-                    itemValue += unitValue * entry.getValue();
+                Double value = unitValue(tracker, entry.getKey());
+                if (value != null) {
+                    itemValue += value * entry.getValue();
                 }
             }
 
-            return new Snapshot(items, pests, activeMillis, actions, coins, itemValue + coins);
-        } catch (Throwable ignored) {
+            double profit = itemValue + coins;
+
+            return new Snapshot(items, pests, activeMillis, actions, coins, profit);
+        } catch (Throwable error) {
+            System.err.println("[TastyFish] Failed to read SkySoft farming session: " + rootMessage(error));
             return Snapshot.empty();
         }
     }
@@ -49,24 +57,33 @@ public final class SkysoftSessionReader {
         try {
             Class<?> targetClass = Class.forName("com.skysoft.features.profit.ProfitTrackerTarget");
             Class<?> presetClass = Class.forName("com.skysoft.features.profit.ProfitTrackerPreset");
-            Object farmingPreset = Enum.valueOf((Class) presetClass, "FARMING");
-            var constructor = targetClass.getDeclaredConstructor(presetClass, String.class);
+
+            @SuppressWarnings({"rawtypes", "unchecked"})
+            Object farmingPreset = Enum.valueOf((Class) presetClass, FARMING);
+
+            Constructor<?> constructor = targetClass.getDeclaredConstructor(presetClass, String.class);
             constructor.setAccessible(true);
             Object target = constructor.newInstance(farmingPreset, null);
 
             Method method = tracker.getClass().getDeclaredMethod("unitValue", targetClass, String.class);
             method.setAccessible(true);
             Object result = method.invoke(tracker, target, itemId);
+
             return result instanceof Number number ? number.doubleValue() : null;
-        } catch (Throwable ignored) {
+        } catch (Throwable error) {
             return null;
         }
     }
 
     private static Map<String, Long> longMap(Object object, String fieldName) throws ReflectiveOperationException {
-        Field field = object.getClass().getDeclaredField(fieldName);
+        Field field = findField(object.getClass(), fieldName);
         field.setAccessible(true);
-        Map<?, ?> source = (Map<?, ?>) field.get(object);
+
+        Object raw = field.get(object);
+        if (!(raw instanceof Map<?, ?> source)) {
+            throw new IllegalStateException("SkySoft field " + fieldName + " is not a Map");
+        }
+
         Map<String, Long> result = new LinkedHashMap<>();
         for (Map.Entry<?, ?> entry : source.entrySet()) {
             if (entry.getKey() instanceof String key && entry.getValue() instanceof Number value) {
@@ -77,15 +94,44 @@ public final class SkysoftSessionReader {
     }
 
     private static long longField(Object object, String fieldName) throws ReflectiveOperationException {
-        Field field = object.getClass().getDeclaredField(fieldName);
+        Field field = findField(object.getClass(), fieldName);
         field.setAccessible(true);
-        return ((Number) field.get(object)).longValue();
+        Object value = field.get(object);
+        if (!(value instanceof Number number)) {
+            throw new IllegalStateException("SkySoft field " + fieldName + " is not numeric");
+        }
+        return number.longValue();
     }
 
     private static double doubleField(Object object, String fieldName) throws ReflectiveOperationException {
-        Field field = object.getClass().getDeclaredField(fieldName);
+        Field field = findField(object.getClass(), fieldName);
         field.setAccessible(true);
-        return ((Number) field.get(object)).doubleValue();
+        Object value = field.get(object);
+        if (!(value instanceof Number number)) {
+            throw new IllegalStateException("SkySoft field " + fieldName + " is not numeric");
+        }
+        return number.doubleValue();
+    }
+
+    private static Field findField(Class<?> type, String name) throws NoSuchFieldException {
+        Class<?> current = type;
+        while (current != null) {
+            try {
+                return current.getDeclaredField(name);
+            } catch (NoSuchFieldException ignored) {
+                current = current.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(type.getName() + "." + name);
+    }
+
+    private static String rootMessage(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null) {
+            current = current.getCause();
+        }
+        String message = current.getMessage();
+        return message == null ? current.toString() : message;
     }
 
     public record Snapshot(
