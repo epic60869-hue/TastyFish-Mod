@@ -8,13 +8,14 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class FarmingUploader {
     private static final Gson GSON = new Gson();
-    private static final String MOD_VERSION = "1.0.5";
+    private static final String MOD_VERSION = "1.0.6";
     private static final long AUTH_COOLDOWN_MS = 30_000L;
     private static final long AUTH_RATE_LIMIT_BACKOFF_MS = 60_000L;
     private static final long MAX_AUTH_BACKOFF_MS = 10 * 60_000L;
@@ -24,62 +25,47 @@ public final class FarmingUploader {
     private volatile String tokenUsername;
     private volatile String tokenUuid;
     private volatile String tokenSessionId;
-    private volatile String baselinedSessionId;
+    private volatile String initializedSessionId;
     private volatile long authBlockedUntil;
     private volatile long authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
     private final AtomicBoolean authenticationInProgress = new AtomicBoolean(false);
     private final AtomicBoolean updateInProgress = new AtomicBoolean(false);
 
-    // Skysoft's profit value is cumulative for the current tracker session.
-    // Keep the last value we submitted so an unchanged tracker value is never
-    // uploaded twice. The server still receives the cumulative value when it
-    // actually changes, allowing its delta logic to count only the increase.
     private volatile String trackedSessionId;
-    private volatile double lastSubmittedProfit = -1.0D;
+    private volatile double lastProfit = -1.0D;
+    private volatile long lastActiveMillis = -1L;
+    private volatile long lastActions = -1L;
+    private volatile Map<String, Long> lastItems = Map.of();
+    private volatile Map<String, Long> lastPests = Map.of();
 
     public void upload(TastyFishConfig config, String username, String uuid, String profile, String sessionId,
                        SkysoftSessionReader.Snapshot snapshot) {
-        if (!config.enabled || config.endpoint.isBlank()) return;
-        if (!snapshot.valid()) return;
-        if (username == null || username.isBlank() || uuid == null || uuid.isBlank() || sessionId == null || sessionId.isBlank()) {
-            System.err.println("[TastyFish] Farming upload skipped: missing username, UUID, or session ID.");
-            return;
-        }
+        if (!config.enabled || config.endpoint.isBlank() || !snapshot.valid()) return;
+        if (username == null || username.isBlank() || uuid == null || uuid.isBlank() || sessionId == null || sessionId.isBlank()) return;
 
         if (!sessionId.equals(trackedSessionId)) {
             trackedSessionId = sessionId;
-            lastSubmittedProfit = -1.0D;
+            lastProfit = -1.0D;
+            lastActiveMillis = -1L;
+            lastActions = -1L;
+            lastItems = Map.of();
+            lastPests = Map.of();
+            initializedSessionId = null;
         }
-
-        // Never queue the same cumulative profit twice. This also protects against
-        // two ticks reading the same Skysoft value while an HTTP request is pending.
-        if (lastSubmittedProfit >= 0.0D && snapshot.profit() <= lastSubmittedProfit) {
-            return;
-        }
-
-        if (updateInProgress.get()) return;
 
         if (token == null || !username.equalsIgnoreCase(tokenUsername)
                 || !uuid.equalsIgnoreCase(tokenUuid) || !sessionId.equals(tokenSessionId)) {
-            authenticate(config, username, uuid, sessionId, profile);
+            authenticate(config, username, uuid, sessionId, profile, snapshot);
             return;
         }
 
-        if (updateInProgress.compareAndSet(false, true)) {
-            // Mark it before sending so the same snapshot cannot be submitted again
-            // while the asynchronous HTTP request is in flight. If the request fails,
-            // this is restored so the next interval can retry it.
-            double previous = lastSubmittedProfit;
-            lastSubmittedProfit = snapshot.profit();
-            sendUpdate(config, username, uuid, profile, sessionId, snapshot, false, previous);
-        }
+        sendDeltaIfNeeded(config, username, uuid, profile, sessionId, snapshot, false);
     }
 
     private void authenticate(TastyFishConfig config, String username, String uuid, String sessionId,
-                              String profile) {
+                              String profile, SkysoftSessionReader.Snapshot snapshot) {
         long now = System.currentTimeMillis();
-        if (now < authBlockedUntil) return;
-        if (!authenticationInProgress.compareAndSet(false, true)) return;
+        if (now < authBlockedUntil || !authenticationInProgress.compareAndSet(false, true)) return;
 
         try {
             JsonObject body = new JsonObject();
@@ -105,28 +91,26 @@ public final class FarmingUploader {
                             System.err.println("[TastyFish] Farming authentication failed: no token returned.");
                             return;
                         }
-
                         token = json.get("token").getAsString();
                         tokenUsername = username;
                         tokenUuid = uuid.toLowerCase();
                         tokenSessionId = sessionId;
                         authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-
                         System.out.println("[TastyFish] Farming authentication successful.");
 
-                        // Establish the server-side baseline once for this session.
-                        // This zero update is intentionally NOT treated as farming profit.
-                        if (!sessionId.equals(baselinedSessionId)) {
-                            sendBaseline(config, username, uuid, profile, sessionId);
-                            baselinedSessionId = sessionId;
+                        // Do not send the current Skysoft total. The first successful
+                        // read establishes the local baseline, so existing profit is not
+                        // credited again. Only future increases are sent to the server.
+                        if (!sessionId.equals(initializedSessionId)) {
+                            establishBaseline(snapshot);
+                            initializedSessionId = sessionId;
                         }
                     } else if (response.statusCode() == 429) {
                         long retryMs = retryAfterMillis(response);
                         authBlockedUntil = System.currentTimeMillis() + retryMs;
                         authBackoffMs = Math.min(Math.max(authBackoffMs * 2L, AUTH_RATE_LIMIT_BACKOFF_MS), MAX_AUTH_BACKOFF_MS);
-                        System.err.println("[TastyFish] Farming authentication rate limited (429). Backing off for "
-                            + (retryMs / 1000L) + " seconds.");
+                        System.err.println("[TastyFish] Farming authentication rate limited (429). Backing off for " + (retryMs / 1000L) + " seconds.");
                     } else {
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
                         System.err.println("[TastyFish] Farming authentication failed: HTTP " + response.statusCode() + ": " + response.body());
@@ -150,44 +134,67 @@ public final class FarmingUploader {
         }
     }
 
-    private void sendBaseline(TastyFishConfig config, String username, String uuid, String profile, String sessionId) {
-        if (!updateInProgress.compareAndSet(false, true)) return;
-
-        JsonObject root = new JsonObject();
-        root.addProperty("username", username);
-        root.addProperty("uuid", uuid);
-        root.addProperty("profile", profile == null ? "" : profile);
-        root.addProperty("preset", "FARMING");
-        root.addProperty("profit", 0.0);
-        root.addProperty("activeMillis", 0L);
-        root.addProperty("actions", 0L);
-        root.addProperty("sessionId", sessionId);
-        root.add("items", GSON.toJsonTree(Map.of()));
-        root.add("pests", GSON.toJsonTree(Map.of()));
-
-        sendJson(config, root, username, uuid, profile, sessionId, false, true, -1.0D);
+    private void establishBaseline(SkysoftSessionReader.Snapshot snapshot) {
+        lastProfit = snapshot.profit();
+        lastActiveMillis = snapshot.activeMillis();
+        lastActions = snapshot.actions();
+        lastItems = copyMap(snapshot.items());
+        lastPests = copyMap(snapshot.pests());
     }
 
-    private void sendUpdate(TastyFishConfig config, String username, String uuid, String profile,
-                            String sessionId, SkysoftSessionReader.Snapshot snapshot, boolean retry,
-                            double previousProfit) {
+    private void sendDeltaIfNeeded(TastyFishConfig config, String username, String uuid, String profile,
+                                   String sessionId, SkysoftSessionReader.Snapshot snapshot, boolean retry) {
+        if (updateInProgress.get()) return;
+
+        if (lastProfit < 0.0D) {
+            establishBaseline(snapshot);
+            initializedSessionId = sessionId;
+            return;
+        }
+
+        double profitDelta = Math.max(0.0D, snapshot.profit() - lastProfit);
+        long activeDelta = Math.max(0L, snapshot.activeMillis() - lastActiveMillis);
+        long actionsDelta = Math.max(0L, snapshot.actions() - lastActions);
+        Map<String, Long> itemDelta = deltaMap(snapshot.items(), lastItems);
+        Map<String, Long> pestDelta = deltaMap(snapshot.pests(), lastPests);
+
+        if (profitDelta <= 0.0D && activeDelta <= 0L && actionsDelta <= 0L && itemDelta.isEmpty() && pestDelta.isEmpty()) return;
+
+        if (!updateInProgress.compareAndSet(false, true)) return;
+
+        double oldProfit = lastProfit;
+        long oldActive = lastActiveMillis;
+        long oldActions = lastActions;
+        Map<String, Long> oldItems = lastItems;
+        Map<String, Long> oldPests = lastPests;
+
+        // Advance the local baseline before sending so duplicate ticks cannot submit
+        // the same gain. Restore it if the request fails.
+        lastProfit = snapshot.profit();
+        lastActiveMillis = snapshot.activeMillis();
+        lastActions = snapshot.actions();
+        lastItems = copyMap(snapshot.items());
+        lastPests = copyMap(snapshot.pests());
+
         JsonObject root = new JsonObject();
         root.addProperty("username", username);
         root.addProperty("uuid", uuid);
         root.addProperty("profile", profile == null ? "" : profile);
         root.addProperty("preset", "FARMING");
-        root.addProperty("profit", snapshot.profit());
-        root.addProperty("activeMillis", snapshot.activeMillis());
-        root.addProperty("actions", snapshot.actions());
+        root.addProperty("profit", profitDelta);
+        root.addProperty("activeMillis", activeDelta);
+        root.addProperty("actions", actionsDelta);
         root.addProperty("sessionId", sessionId);
-        root.add("items", GSON.toJsonTree(snapshot.items()));
-        root.add("pests", GSON.toJsonTree(snapshot.pests()));
+        root.add("items", GSON.toJsonTree(itemDelta));
+        root.add("pests", GSON.toJsonTree(pestDelta));
 
-        sendJson(config, root, username, uuid, profile, sessionId, retry, false, previousProfit);
+        sendJson(config, root, username, uuid, profile, sessionId, retry,
+            oldProfit, oldActive, oldActions, oldItems, oldPests);
     }
 
     private void sendJson(TastyFishConfig config, JsonObject root, String username, String uuid, String profile,
-                          String sessionId, boolean retry, boolean baseline, double previousProfit) {
+                          String sessionId, boolean retry, double oldProfit, long oldActive, long oldActions,
+                          Map<String, Long> oldItems, Map<String, Long> oldPests) {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(config.endpoint))
             .timeout(Duration.ofSeconds(15))
@@ -200,36 +207,55 @@ public final class FarmingUploader {
         client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenAccept(response -> {
             try {
                 if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    System.out.println("[TastyFish] Farming " + (baseline ? "baseline" : "update") + " uploaded: " + response.body());
+                    System.out.println("[TastyFish] Farming delta uploaded: " + response.body());
                 } else if (response.statusCode() == 401 && !retry) {
-                    if (!baseline) {
-                        lastSubmittedProfit = previousProfit;
-                    }
+                    restore(oldProfit, oldActive, oldActions, oldItems, oldPests);
                     token = null;
                     tokenUsername = null;
                     tokenUuid = null;
                     tokenSessionId = null;
                     System.out.println("[TastyFish] Farming token expired. Re-authenticating...");
-                    authenticate(config, username, uuid, sessionId, profile);
+                    authenticate(config, username, uuid, sessionId, profile, SkysoftSessionReader.read());
                 } else if (response.statusCode() == 429) {
-                    if (!baseline) lastSubmittedProfit = previousProfit;
+                    restore(oldProfit, oldActive, oldActions, oldItems, oldPests);
                     long retryMs = retryAfterMillis(response);
                     authBlockedUntil = System.currentTimeMillis() + retryMs;
-                    System.err.println("[TastyFish] Farming upload rate limited (429). Backing off for "
-                        + (retryMs / 1000L) + " seconds.");
+                    System.err.println("[TastyFish] Farming upload rate limited (429). Backing off for " + (retryMs / 1000L) + " seconds.");
                 } else {
-                    if (!baseline) lastSubmittedProfit = previousProfit;
+                    restore(oldProfit, oldActive, oldActions, oldItems, oldPests);
                     System.err.println("[TastyFish] Farming upload failed: HTTP " + response.statusCode() + ": " + response.body());
                 }
             } finally {
                 updateInProgress.set(false);
             }
         }).exceptionally(error -> {
-            if (!baseline) lastSubmittedProfit = previousProfit;
+            restore(oldProfit, oldActive, oldActions, oldItems, oldPests);
             updateInProgress.set(false);
             System.err.println("[TastyFish] Farming upload failed: " + rootMessage(error));
             return null;
         });
+    }
+
+    private void restore(double profit, long active, long actions, Map<String, Long> items, Map<String, Long> pests) {
+        lastProfit = profit;
+        lastActiveMillis = active;
+        lastActions = actions;
+        lastItems = items;
+        lastPests = pests;
+    }
+
+    private static Map<String, Long> deltaMap(Map<String, Long> current, Map<String, Long> previous) {
+        Map<String, Long> delta = new HashMap<>();
+        for (Map.Entry<String, Long> entry : current.entrySet()) {
+            long oldValue = previous.getOrDefault(entry.getKey(), 0L);
+            long difference = entry.getValue() - oldValue;
+            if (difference > 0L) delta.put(entry.getKey(), difference);
+        }
+        return delta;
+    }
+
+    private static Map<String, Long> copyMap(Map<String, Long> source) {
+        return source == null || source.isEmpty() ? Map.of() : Map.copyOf(source);
     }
 
     private long retryAfterMillis(HttpResponse<?> response) {
@@ -238,8 +264,7 @@ public final class FarmingUploader {
             try {
                 long seconds = Long.parseLong(retryAfter);
                 if (seconds >= 0) return Math.min(seconds * 1000L, MAX_AUTH_BACKOFF_MS);
-            } catch (NumberFormatException ignored) {
-            }
+            } catch (NumberFormatException ignored) { }
         }
         return authBackoffMs;
     }
