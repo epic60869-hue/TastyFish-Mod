@@ -29,7 +29,7 @@ public final class FarmingUploader {
     private final AtomicBoolean updateInProgress = new AtomicBoolean(false);
 
     public void upload(TastyFishConfig config, String username, String uuid, String profile, String sessionId,
-                       FarmingSessionReader.Snapshot snapshot) {
+                       FarmingProfitTracker.Snapshot snapshot) {
         if (!config.enabled || config.endpoint.isBlank() || !snapshot.valid()) return;
         if (username == null || username.isBlank() || uuid == null || uuid.isBlank() || sessionId == null || sessionId.isBlank()) return;
 
@@ -43,74 +43,65 @@ public final class FarmingUploader {
     }
 
     private void authenticate(TastyFishConfig config, String username, String uuid, String sessionId,
-                              String profile, FarmingSessionReader.Snapshot snapshot) {
+                              String profile, FarmingProfitTracker.Snapshot snapshot) {
         long now = System.currentTimeMillis();
         if (now < authBlockedUntil || !authenticationInProgress.compareAndSet(false, true)) return;
 
-        try {
-            JsonObject body = new JsonObject();
-            body.addProperty("username", username);
-            body.addProperty("uuid", uuid);
-            body.addProperty("sessionId", sessionId);
-            body.addProperty("modVersion", MOD_VERSION);
+        JsonObject body = new JsonObject();
+        body.addProperty("username", username);
+        body.addProperty("uuid", uuid);
+        body.addProperty("sessionId", sessionId);
+        body.addProperty("modVersion", MOD_VERSION);
 
-            HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(authEndpoint(config.endpoint)))
-                .timeout(Duration.ofSeconds(15))
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(body)))
-                .build();
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(authEndpoint(config.endpoint)))
+            .timeout(Duration.ofSeconds(15))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(body)))
+            .build();
 
-            client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenAccept(response -> {
-                try {
-                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        JsonObject json = GSON.fromJson(response.body(), JsonObject.class);
-                        if (json == null || !json.has("token")) {
-                            authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-                            System.err.println("[TastyFish] Farming authentication failed: no token returned.");
-                            return;
-                        }
-                        token = json.get("token").getAsString();
-                        tokenUsername = username;
-                        tokenUuid = uuid.toLowerCase();
-                        tokenSessionId = sessionId;
-                        authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
+        client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenAccept(response -> {
+            try {
+                if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    JsonObject json = GSON.fromJson(response.body(), JsonObject.class);
+                    if (json == null || !json.has("token")) {
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-                        System.out.println("[TastyFish] Farming authentication successful.");
-                        if (snapshot != null) {
-                            sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
-                        }
-                    } else if (response.statusCode() == 429) {
-                        long retryMs = retryAfterMillis(response);
-                        authBlockedUntil = System.currentTimeMillis() + retryMs;
-                        authBackoffMs = Math.min(Math.max(authBackoffMs * 2L, AUTH_RATE_LIMIT_BACKOFF_MS), MAX_AUTH_BACKOFF_MS);
-                        System.err.println("[TastyFish] Farming authentication rate limited (429). Backing off for " + (retryMs / 1000L) + " seconds.");
-                    } else {
-                        authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-                        System.err.println("[TastyFish] Farming authentication failed: HTTP " + response.statusCode() + ": " + response.body());
+                        return;
                     }
-                } catch (Exception e) {
+                    token = json.get("token").getAsString();
+                    tokenUsername = username;
+                    tokenUuid = uuid.toLowerCase();
+                    tokenSessionId = sessionId;
+                    authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
                     authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-                    System.err.println("[TastyFish] Farming authentication response was invalid: " + e.getMessage());
-                } finally {
-                    authenticationInProgress.set(false);
+                    System.out.println("[TastyFish] Farming authentication successful.");
+                    if (snapshot != null) sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
+                } else if (response.statusCode() == 429) {
+                    long retryMs = retryAfterMillis(response);
+                    authBlockedUntil = System.currentTimeMillis() + retryMs;
+                    authBackoffMs = Math.min(Math.max(authBackoffMs * 2L, AUTH_RATE_LIMIT_BACKOFF_MS), MAX_AUTH_BACKOFF_MS);
+                    System.err.println("[TastyFish] Farming authentication rate limited (429). Backing off for " + retryMs / 1000L + " seconds.");
+                } else {
+                    authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
+                    System.err.println("[TastyFish] Farming authentication failed: HTTP " + response.statusCode());
                 }
-            }).exceptionally(error -> {
-                authenticationInProgress.set(false);
+            } catch (Exception e) {
                 authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-                System.err.println("[TastyFish] Farming authentication failed: " + rootMessage(error));
-                return null;
-            });
-        } catch (Exception e) {
+                System.err.println("[TastyFish] Farming authentication response was invalid: " + e.getMessage());
+            } finally {
+                authenticationInProgress.set(false);
+            }
+        }).exceptionally(error -> {
             authenticationInProgress.set(false);
             authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
-            System.err.println("[TastyFish] Farming authentication failed: " + e.getMessage());
-        }
+            System.err.println("[TastyFish] Farming authentication failed: " + rootMessage(error));
+            return null;
+        });
     }
 
     private void sendCumulativeUpdate(TastyFishConfig config, String username, String uuid, String profile,
-                                      String sessionId, FarmingSessionReader.Snapshot snapshot, boolean retry) {
+                                      String sessionId, FarmingProfitTracker.Snapshot snapshot, boolean retry) {
         if (!updateInProgress.compareAndSet(false, true)) return;
 
         JsonObject root = new JsonObject();
@@ -124,64 +115,45 @@ public final class FarmingUploader {
         root.addProperty("sessionId", sessionId);
         root.add("items", GSON.toJsonTree(snapshot.items()));
         root.add("pests", GSON.toJsonTree(snapshot.pests()));
-
         sendJson(config, root, username, uuid, profile, sessionId, snapshot, retry);
     }
 
     private void sendJson(TastyFishConfig config, JsonObject root, String username, String uuid, String profile,
-                          String sessionId, FarmingSessionReader.Snapshot snapshot, boolean retry) {
+                          String sessionId, FarmingProfitTracker.Snapshot snapshot, boolean retry) {
         HttpRequest request = HttpRequest.newBuilder()
-            .uri(URI.create(config.endpoint))
-            .timeout(Duration.ofSeconds(15))
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
+            .uri(URI.create(config.endpoint)).timeout(Duration.ofSeconds(15))
+            .header("Content-Type", "application/json").header("Accept", "application/json")
             .header("Authorization", "Bearer " + token)
-            .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(root)))
-            .build();
+            .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(root))).build();
 
         client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenAccept(response -> {
             try {
                 if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    System.out.println("[TastyFish] Farming cumulative update uploaded: " + response.body());
+                    System.out.println("[TastyFish] Farming cumulative update uploaded.");
                 } else if (response.statusCode() == 401 && !retry) {
-                    token = null;
-                    tokenUsername = null;
-                    tokenUuid = null;
-                    tokenSessionId = null;
-                    System.out.println("[TastyFish] Farming token expired. Re-authenticating...");
+                    token = tokenUsername = tokenUuid = tokenSessionId = null;
                     authenticate(config, username, uuid, sessionId, profile, snapshot);
                 } else if (response.statusCode() == 429) {
                     long retryMs = retryAfterMillis(response);
                     authBlockedUntil = System.currentTimeMillis() + retryMs;
-                    System.err.println("[TastyFish] Farming upload rate limited (429). Backing off for " + (retryMs / 1000L) + " seconds.");
+                    System.err.println("[TastyFish] Farming upload rate limited (429). Backing off for " + retryMs / 1000L + " seconds.");
                 } else {
-                    System.err.println("[TastyFish] Farming upload failed: HTTP " + response.statusCode() + ": " + response.body());
+                    System.err.println("[TastyFish] Farming upload failed: HTTP " + response.statusCode());
                 }
-            } finally {
-                updateInProgress.set(false);
-            }
-        }).exceptionally(error -> {
-            updateInProgress.set(false);
-            System.err.println("[TastyFish] Farming upload failed: " + rootMessage(error));
-            return null;
-        });
+            } finally { updateInProgress.set(false); }
+        }).exceptionally(error -> { updateInProgress.set(false); System.err.println("[TastyFish] Farming upload failed: " + rootMessage(error)); return null; });
     }
 
     private long retryAfterMillis(HttpResponse<?> response) {
-        String retryAfter = response.headers().firstValue("Retry-After").orElse("").trim();
-        if (!retryAfter.isEmpty()) {
-            try {
-                long seconds = Long.parseLong(retryAfter);
-                if (seconds >= 0) return Math.min(seconds * 1000L, MAX_AUTH_BACKOFF_MS);
-            } catch (NumberFormatException ignored) { }
-        }
+        String value = response.headers().firstValue("Retry-After").orElse("").trim();
+        try { if (!value.isEmpty()) return Math.min(Math.max(0L, Long.parseLong(value)) * 1000L, MAX_AUTH_BACKOFF_MS); }
+        catch (NumberFormatException ignored) { }
         return authBackoffMs;
     }
 
-    private static String authEndpoint(String updateEndpoint) {
-        if (updateEndpoint.endsWith("/update")) return updateEndpoint.substring(0, updateEndpoint.length() - 7) + "/auth";
-        if (updateEndpoint.endsWith("/")) return updateEndpoint + "auth";
-        return updateEndpoint + "/auth";
+    private static String authEndpoint(String endpoint) {
+        if (endpoint.endsWith("/update")) return endpoint.substring(0, endpoint.length() - 7) + "/auth";
+        return endpoint.endsWith("/") ? endpoint + "auth" : endpoint + "/auth";
     }
 
     private static String rootMessage(Throwable error) {
@@ -190,7 +162,5 @@ public final class FarmingUploader {
         return current.getMessage() == null ? current.toString() : current.getMessage();
     }
 
-    public static String newSessionId() {
-        return UUID.randomUUID().toString();
-    }
+    public static String newSessionId() { return UUID.randomUUID().toString(); }
 }
