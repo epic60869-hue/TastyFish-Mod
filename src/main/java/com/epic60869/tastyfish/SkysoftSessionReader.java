@@ -17,7 +17,6 @@ public final class SkysoftSessionReader {
     private static final String PRESET_CLASS = "com.skysoft.features.profit.ProfitTrackerPreset";
 
     private static boolean methodDebugPrinted = false;
-    private static boolean fallbackDebugPrinted = false;
 
     private SkysoftSessionReader() {}
 
@@ -45,13 +44,13 @@ public final class SkysoftSessionReader {
             long actions = longField(stats, "actions");
             double coins = doubleField(stats, "coins");
 
+            // Match Skysoft's own Known Profit valuation exactly. Do not use
+            // TastyFish's independent ItemPriceResolver as a fallback because
+            // that can value items Skysoft does not include in Known Profit.
             Object target = createFarmingTarget();
             double itemValue = 0.0;
             long valuedItems = 0L;
             long pricedItemTypes = 0L;
-            long skysoftPricedTypes = 0L;
-            long fallbackPricedTypes = 0L;
-            double fallbackValue = 0.0;
             boolean hadItems = !items.isEmpty();
 
             for (Map.Entry<String, Long> entry : items.entrySet()) {
@@ -60,25 +59,11 @@ public final class SkysoftSessionReader {
                 if (count <= 0) continue;
 
                 Double unitValue = null;
-                boolean usedFallback = false;
-
                 try {
                     unitValue = skysoftUnitValue(trackerClass, tracker, target, itemId);
                 } catch (Throwable ignored) {
-                    // Skysoft could not price this item. Try the independent Hypixel
-                    // NPC/Bazaar resolver below instead of dropping its value.
-                }
-
-                if (unitValue == null || !Double.isFinite(unitValue) || unitValue <= 0.0) {
-                    double fallback = ItemPriceResolver.value(itemId);
-                    if (Double.isFinite(fallback) && fallback > 0.0) {
-                        unitValue = fallback;
-                        usedFallback = true;
-                        fallbackPricedTypes++;
-                        fallbackValue += fallback * count;
-                    }
-                } else {
-                    skysoftPricedTypes++;
+                    // Skysoft could not value this item. Known Profit does not
+                    // invent a value for it, so leave it out of the calculation.
                 }
 
                 if (unitValue != null && Double.isFinite(unitValue) && unitValue > 0.0) {
@@ -86,15 +71,10 @@ public final class SkysoftSessionReader {
                     valuedItems += count;
                     pricedItemTypes++;
                 }
-
-                if (usedFallback && !fallbackDebugPrinted) {
-                    fallbackDebugPrinted = true;
-                    System.out.println("[TastyFish] ItemPriceResolver fallback is being used for Skysoft-unpriced items.");
-                }
             }
 
-            // If Skysoft has tracked items but none can be valued by either Skysoft
-            // or the fallback resolver, do not upload a fabricated zero.
+            // If Skysoft has tracked items but none are currently priceable,
+            // do not upload a fabricated zero.
             if (hadItems && pricedItemTypes == 0L) {
                 return Snapshot.invalid();
             }
@@ -103,13 +83,6 @@ public final class SkysoftSessionReader {
             double profit = itemValue + coins - coinCosts;
 
             if (!Double.isFinite(profit)) return Snapshot.invalid();
-
-            if (fallbackPricedTypes > 0) {
-                System.out.println("[TastyFish] Farming valuation: Skysoft types=" + skysoftPricedTypes
-                    + ", fallback types=" + fallbackPricedTypes
-                    + ", fallback value=" + Math.round(fallbackValue)
-                    + ", total profit=" + Math.round(profit));
-            }
 
             return new Snapshot(
                 items,
