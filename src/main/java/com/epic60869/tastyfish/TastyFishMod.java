@@ -39,7 +39,7 @@ public final class TastyFishMod implements ClientModInitializer {
     }
 
     private int openMenu() {
-        Minecraft.getInstance().execute(() -> Minecraft.getInstance().setScreen(new TastyFishScreen(config)));
+        Minecraft.getInstance().execute(() -> Minecraft.getInstance().gui.setScreen(new TastyFishScreen(config)));
         return 1;
     }
 
