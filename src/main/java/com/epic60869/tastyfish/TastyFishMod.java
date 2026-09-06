@@ -32,13 +32,22 @@ public final class TastyFishMod implements ClientModInitializer {
 
     private void registerCommands() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
-            dispatcher.register(ClientCommands.literal("tf").executes(context -> openMenu()));
-            dispatcher.register(ClientCommands.literal("tastyfish").executes(context -> openMenu()));
+            dispatcher.register(ClientCommands.literal("tf")
+                .executes(context -> openMenu())
+                .then(ClientCommands.literal("gui").executes(context -> openGuiEditor())));
+            dispatcher.register(ClientCommands.literal("tastyfish")
+                .executes(context -> openMenu())
+                .then(ClientCommands.literal("gui").executes(context -> openGuiEditor())));
         });
     }
 
     private int openMenu() {
         Minecraft.getInstance().execute(() -> Minecraft.getInstance().gui.setScreen(new TastyFishScreen(config)));
+        return 1;
+    }
+
+    private int openGuiEditor() {
+        Minecraft.getInstance().execute(() -> Minecraft.getInstance().gui.setScreen(new TastyFishGuiEditor(config)));
         return 1;
     }
 
