@@ -24,6 +24,7 @@ public final class TastyFishMod implements ClientModInitializer {
         Path configPath = minecraft.gameDirectory.toPath().resolve("config").resolve("tastyfish-mod.json");
         config = TastyFishConfig.load(configPath);
         FarmingRngTracker.get().register();
+        TastyFishRngHud.register(config);
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
         registerCommands();
         System.out.println("[TastyFish] SkySoft integration and farming RNG overlay loaded.");
