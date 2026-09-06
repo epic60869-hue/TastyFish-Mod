@@ -3,7 +3,7 @@
   "id": "tastyfish-mod",
   "version": "${version}",
   "name": "TastyFish Mod",
-  "description": "Uploads SkySoft farming session statistics to the Tasty Fish farming leaderboard.",
+  "description": "Standalone TastyFish farming tracker, profit HUD and farming RNG overlay.",
   "authors": ["epic60869"],
   "environment": "client",
   "entrypoints": {
@@ -11,16 +11,10 @@
       "com.epic60869.tastyfish.TastyFishMod"
     ]
   },
-  "mixins": [
-    "tastyfish.mixins.json"
-  ],
   "depends": {
     "fabricloader": ">=0.19.3",
     "fabric-api": ">=0.153.0+26.2",
     "minecraft": "26.2",
     "java": ">=25"
-  },
-  "suggests": {
-    "skysoft": "*"
   }
 }
