@@ -88,6 +88,10 @@ public final class FarmingProfitTracker {
     public double profitPerHour() { return activeMillis <= 0L ? 0.0 : profit() / (activeMillis / 3_600_000.0); }
     public long sessionStartedMillis() { return sessionStartedMillis; }
 
+    public Snapshot snapshot() {
+        return new Snapshot(itemCounts(), pestKills(), activeMillis(), actions(), coins(), profit(), true);
+    }
+
     public List<PestRow> pestRows() {
         List<PestRow> rows = new ArrayList<>();
         long recorded = pestKills.values().stream().mapToLong(Long::longValue).sum();
@@ -169,5 +173,6 @@ public final class FarmingProfitTracker {
     }
     private void add(String display, String id) { displayToId.put(normalize(display), id); }
     private static String normalize(String value) { return value == null ? "" : value.replaceAll("§[0-9a-fk-or]", "").replace("✦", "").replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT); }
+    public record Snapshot(Map<String, Long> items, Map<String, Long> pests, long activeMillis, long actions, double coins, double profit, boolean valid) {}
     public record PestRow(String name, long count, double percentage) {}
 }
