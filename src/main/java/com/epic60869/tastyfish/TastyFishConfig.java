@@ -14,7 +14,7 @@ public final class TastyFishConfig {
     public int uploadIntervalSeconds = 30;
     public boolean enabled = true;
     public boolean farmingRngEnabled = true;
-    public boolean farmingRngBackground = true;
+    public boolean farmingRngBackground = false;
     public int farmingRngX = 8;
     public int farmingRngY = 8;
 
