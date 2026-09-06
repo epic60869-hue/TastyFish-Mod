@@ -386,7 +386,7 @@ public final class SkysoftSessionReader {
         boolean valid
     ) {
         public static Snapshot empty() {
-            return new Snapshot(Map.of(), Map.of(), 0L, 0L, 0.0, 0.0, 0L, true);
+            return new Snapshot(Map.of(), Map.of(), 0L, 0L, 0.0, 0L, 0L, true);
         }
 
         public static Snapshot invalid() {
