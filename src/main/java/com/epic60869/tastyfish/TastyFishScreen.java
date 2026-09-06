@@ -24,6 +24,8 @@ public final class TastyFishScreen extends Screen {
         clearWidgets();
         addRenderableWidget(Button.builder(Component.literal("Farming"), b -> { farmingPage = true; rebuild(); })
             .bounds(12, 48, 96, 22).build());
+        addRenderableWidget(Button.builder(Component.literal("GUI"), b -> Minecraft.getInstance().gui.setScreen(new TastyFishGuiEditor(config)))
+            .bounds(12, 76, 96, 22).build());
         addRenderableWidget(Button.builder(Component.literal("Close"), b -> onClose())
             .bounds(width - 92, height - 32, 80, 20).build());
     }
@@ -43,27 +45,23 @@ public final class TastyFishScreen extends Screen {
         graphics.text(font, "TastyFish", 14, 16, 0xFFFFFF55, true);
         graphics.text(font, "Settings", 14, 30, 0xFF888890, false);
         graphics.fill(112, 0, 113, height, 0xFF29292F);
-
         if (farmingPage) renderFarming(graphics);
     }
 
     private void renderFarming(GuiGraphicsExtractor graphics) {
         int left = 145;
         graphics.text(font, "Farming", left, 28, 0xFFFFFFFF, true);
-        graphics.text(font, "Farming RNG Overlay", left, 67, 0xFFFFFFFF, true);
-        graphics.text(font, "Show rare farming drops on screen", left, 82, 0xFF9999A2, false);
-
-        int tx = width - 92, ty = 61;
+        graphics.text(font, "Farming RNG Overlay", left, 56, 0xFFFFFFFF, true);
+        graphics.text(font, "Show rare farming drops on screen", left, 70, 0xFF9999A2, false);
+        int tx = width - 92, ty = 51;
         drawToggle(graphics, tx, ty, toggleProgress);
-
-        graphics.text(font, "Background", left, 125, 0xFFFFFFFF, true);
-        graphics.text(font, "Show a black background behind the overlay", left, 140, 0xFF9999A2, false);
-        graphics.fill(tx, 119, tx + 44, 141, 0xFF303038);
-        if (config.farmingRngBackground) graphics.fill(tx + 22, 119, tx + 44, 141, 0xFF6E6E78);
-        graphics.fill(tx + (config.farmingRngBackground ? 24 : 2), 121, tx + (config.farmingRngBackground ? 42 : 20), 139, 0xFFE8E8EA);
-
-        graphics.text(font, "Preview", left, 185, 0xFF777780, false);
-        TastyFishRngHud.renderPreview(graphics, left, 205);
+        graphics.text(font, "Background", left, 102, 0xFFFFFFFF, true);
+        graphics.text(font, "Show a black background behind the overlay", left, 116, 0xFF9999A2, false);
+        graphics.fill(tx, 96, tx + 44, 118, 0xFF303038);
+        if (config.farmingRngBackground) graphics.fill(tx + 22, 96, tx + 44, 118, 0xFF6E6E78);
+        graphics.fill(tx + (config.farmingRngBackground ? 24 : 2), 98, tx + (config.farmingRngBackground ? 42 : 20), 116, 0xFFE8E8EA);
+        graphics.text(font, "Preview", left, 154, 0xFF777780, false);
+        TastyFishRngHud.renderPreview(graphics, left, 172);
     }
 
     private void drawToggle(GuiGraphicsExtractor graphics, int x, int y, float progress) {
@@ -71,18 +69,17 @@ public final class TastyFishScreen extends Screen {
         int knobX = x + 2 + Math.round(progress * 20f);
         graphics.fill(knobX, y + 2, knobX + 20, y + 20, 0xFFE8E8EA);
         if (progress > 0.5f) graphics.fill(x + 22, y, x + 44, y + 22, 0xFF6E6E78);
-        graphics.fill(knobX, y + 2, knobX + 20, y + 20, 0xFFE8E8EA);
     }
 
     @Override public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
         if (event.button() == 0 && farmingPage) {
             int x = (int) event.x(), y = (int) event.y();
-            if (x >= width - 100 && x <= width - 45 && y >= 55 && y <= 91) {
+            if (x >= width - 100 && x <= width - 45 && y >= 45 && y <= 82) {
                 config.farmingRngEnabled = !config.farmingRngEnabled;
                 save();
                 return true;
             }
-            if (x >= width - 100 && x <= width - 45 && y >= 113 && y <= 148) {
+            if (x >= width - 100 && x <= width - 45 && y >= 91 && y <= 126) {
                 config.farmingRngBackground = !config.farmingRngBackground;
                 save();
                 return true;
