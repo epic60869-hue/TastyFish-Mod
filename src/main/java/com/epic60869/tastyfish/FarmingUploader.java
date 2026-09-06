@@ -37,7 +37,7 @@ public final class FarmingUploader {
 
         if (token == null || !username.equalsIgnoreCase(tokenUsername)
                 || !uuid.equalsIgnoreCase(tokenUuid) || !sessionId.equals(tokenSessionId)) {
-            authenticate(config, username, uuid, sessionId, profile);
+            authenticate(config, username, uuid, sessionId, profile, snapshot);
             return;
         }
 
@@ -45,7 +45,7 @@ public final class FarmingUploader {
     }
 
     private void authenticate(TastyFishConfig config, String username, String uuid, String sessionId,
-                              String profile) {
+                              String profile, SkysoftSessionReader.Snapshot snapshot) {
         long now = System.currentTimeMillis();
         if (now < authBlockedUntil || !authenticationInProgress.compareAndSet(false, true)) return;
 
@@ -80,6 +80,13 @@ public final class FarmingUploader {
                         authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
                         System.out.println("[TastyFish] Farming authentication successful.");
+
+                        // Do not discard the first valid Skysoft snapshot. Upload it
+                        // immediately after authentication so the leaderboard starts
+                        // counting from the first value available after game launch.
+                        if (snapshot != null) {
+                            sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
+                        }
                     } else if (response.statusCode() == 429) {
                         long retryMs = retryAfterMillis(response);
                         authBlockedUntil = System.currentTimeMillis() + retryMs;
@@ -126,11 +133,11 @@ public final class FarmingUploader {
         root.add("items", GSON.toJsonTree(snapshot.items()));
         root.add("pests", GSON.toJsonTree(snapshot.pests()));
 
-        sendJson(config, root, username, uuid, profile, sessionId, retry);
+        sendJson(config, root, username, uuid, profile, sessionId, snapshot, retry);
     }
 
     private void sendJson(TastyFishConfig config, JsonObject root, String username, String uuid, String profile,
-                          String sessionId, boolean retry) {
+                          String sessionId, SkysoftSessionReader.Snapshot snapshot, boolean retry) {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(config.endpoint))
             .timeout(Duration.ofSeconds(15))
@@ -150,7 +157,7 @@ public final class FarmingUploader {
                     tokenUuid = null;
                     tokenSessionId = null;
                     System.out.println("[TastyFish] Farming token expired. Re-authenticating...");
-                    authenticate(config, username, uuid, sessionId, profile);
+                    authenticate(config, username, uuid, sessionId, profile, snapshot);
                 } else if (response.statusCode() == 429) {
                     long retryMs = retryAfterMillis(response);
                     authBlockedUntil = System.currentTimeMillis() + retryMs;
