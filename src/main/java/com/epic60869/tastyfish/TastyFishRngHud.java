@@ -5,12 +5,14 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.resources.Identifier;
 
+import java.util.List;
 import java.util.Locale;
 
 public final class TastyFishRngHud {
     private static final Identifier ID = Identifier.fromNamespaceAndPath("tastyfish-mod", "farming_rng");
-    private static final int BASE_WIDTH = 250;
-    private static final int BASE_HEIGHT = 48;
+    private static final int BASE_WIDTH = 300;
+    private static final int LINE_HEIGHT = 14;
+    private static final int BASE_HEIGHT = 18;
     private static TastyFishConfig config;
 
     private TastyFishRngHud() {}
@@ -22,9 +24,9 @@ public final class TastyFishRngHud {
 
     private static void extract(GuiGraphicsExtractor graphics, net.minecraft.client.DeltaTracker deltaTracker) {
         if (config == null || !config.farmingRngEnabled || Minecraft.getInstance().player == null) return;
-        FarmingRngTracker.Drop drop = FarmingRngTracker.get().active();
-        if (drop == null) return;
-        render(graphics, drop, config.farmingRngX, config.farmingRngY);
+        List<FarmingRngTracker.Drop> drops = FarmingRngTracker.get().active();
+        if (drops.isEmpty()) return;
+        render(graphics, drops, config.farmingRngX, config.farmingRngY);
     }
 
     public static int width() {
@@ -32,7 +34,8 @@ public final class TastyFishRngHud {
     }
 
     public static int height() {
-        return Math.max(1, Math.round(BASE_HEIGHT * scale()));
+        int lines = Math.max(1, FarmingRngTracker.get().active().size());
+        return Math.max(1, Math.round((4 + lines * LINE_HEIGHT) * scale()));
     }
 
     public static float scale() {
@@ -62,13 +65,14 @@ public final class TastyFishRngHud {
     }
 
     public static void renderPreview(GuiGraphicsExtractor graphics, int x, int y) {
-        render(graphics,
-            new FarmingRngTracker.Drop(1, "Overgrown Grass", "RARE DROP", 125000, Long.MAX_VALUE),
-            x, y);
+        render(graphics, List.of(
+            new FarmingRngTracker.Drop(1, "Crystalized Moonlight", "RARE DROP", 500000, Long.MAX_VALUE),
+            new FarmingRngTracker.Drop(2, "Designer Coffee Beans", "RARE DROP", 500000, Long.MAX_VALUE)
+        ), x, y);
     }
 
     private static void render(GuiGraphicsExtractor graphics,
-                               FarmingRngTracker.Drop drop,
+                               List<FarmingRngTracker.Drop> drops,
                                int x,
                                int y) {
         float s = scale();
@@ -76,23 +80,27 @@ public final class TastyFishRngHud {
         graphics.pose().translate((float) x, (float) y);
         graphics.pose().scale(s, s);
 
-        // Compact Nopo/Overflow-style info HUD: subtle dark panel, small yellow
-        // category line, bold white result, and a muted value line.
+        int contentHeight = 4 + drops.size() * LINE_HEIGHT;
         if (config != null && config.farmingRngBackground) {
-            graphics.fill(-5, -4, BASE_WIDTH + 4, BASE_HEIGHT + 2, 0xA8000000);
-            graphics.fill(-5, -4, BASE_WIDTH + 4, -3, 0x55FFFFFF);
-            graphics.fill(-5, BASE_HEIGHT + 1, BASE_WIDTH + 4, BASE_HEIGHT + 2, 0x33000000);
+            graphics.fill(-5, -3, BASE_WIDTH + 4, contentHeight + 1, 0xA8000000);
+            graphics.fill(-5, -3, BASE_WIDTH + 4, -2, 0x55FFFFFF);
+            graphics.fill(-5, contentHeight, BASE_WIDTH + 4, contentHeight + 1, 0x33000000);
         }
 
-        String rarity = drop.rarity();
-        String item = (drop.amount() > 1 ? drop.amount() + "x " : "") + drop.name();
-        String price = drop.unitPrice() < 0
-            ? "—"
-            : formatCoins(drop.unitPrice() * drop.amount()) + " coins";
+        int yOffset = 0;
+        for (FarmingRngTracker.Drop drop : drops) {
+            String item = drop.amount() + "x " + drop.name();
+            String price = drop.unitPrice() < 0
+                ? "—"
+                : formatCoins(drop.unitPrice() * drop.amount());
 
-        drawShadowed(graphics, rarity, 6, 0, 0xFFFFD84D, true);
-        drawShadowed(graphics, item, 6, 13, 0xFFFFFFFF, true);
-        drawShadowed(graphics, price, 6, 28, 0xFFB8B8B8, false);
+            // One complete drop per line: amount, item name, then total value.
+            drawShadowed(graphics, item, 4, yOffset, 0xFFFFFFFF, true);
+            int priceX = Math.min(BASE_WIDTH - 4 - Minecraft.getInstance().font.width(price),
+                4 + Minecraft.getInstance().font.width(item) + 8);
+            drawShadowed(graphics, price, priceX, yOffset, 0xFFB8B8B8, false);
+            yOffset += LINE_HEIGHT;
+        }
 
         graphics.pose().popMatrix();
     }
@@ -110,15 +118,22 @@ public final class TastyFishRngHud {
 
     private static String formatCoins(long value) {
         if (value >= 1_000_000_000L) {
-            return String.format(Locale.ROOT, "%.2fB", value / 1_000_000_000.0);
+            return compactNumber(value / 1_000_000_000.0, "b");
         }
         if (value >= 1_000_000L) {
-            return String.format(Locale.ROOT, "%.2fM", value / 1_000_000.0);
+            return compactNumber(value / 1_000_000.0, "m");
         }
         if (value >= 1_000L) {
-            return String.format(Locale.ROOT, "%.1fk", value / 1_000.0);
+            return compactNumber(value / 1_000.0, "k");
         }
         return Long.toString(value);
+    }
+
+    private static String compactNumber(double value, String suffix) {
+        String formatted = String.format(Locale.ROOT, "%.2f", value)
+            .replaceAll("0+$", "")
+            .replaceAll("\\.$", "");
+        return formatted + suffix;
     }
 
     private static void save() {
