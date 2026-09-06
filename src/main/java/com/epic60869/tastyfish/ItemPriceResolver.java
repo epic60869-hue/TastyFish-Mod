@@ -11,6 +11,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -27,6 +28,7 @@ public final class ItemPriceResolver {
     private static final Map<String, Double> NPC_PRICES = new HashMap<>();
     private static final Map<String, Double> BAZAAR_PRICES = new HashMap<>();
     private static final Map<String, Double> LOWEST_BIN_PRICES = new HashMap<>();
+    private static final Map<String, String> NAME_TO_ID = new HashMap<>();
     private static final AtomicBoolean REFRESHING = new AtomicBoolean(false);
     private static volatile long lastRefresh = 0L;
 
@@ -43,6 +45,17 @@ public final class ItemPriceResolver {
         return bin == null ? 0.0 : Math.max(0.0, bin);
     }
 
+    /** Resolves a SkyBlock display name to its current item ID before pricing it. */
+    public static double valueByName(String displayName) {
+        if (displayName == null || displayName.isBlank()) return 0.0;
+        String normalized = normalizeName(displayName);
+        String id = NAME_TO_ID.get(normalized);
+        if (id != null) return value(id);
+
+        // Useful fallback for names whose API display name matches the conventional ID.
+        return value(displayName.toUpperCase(Locale.ROOT).replace(' ', '_').replace('-', '_'));
+    }
+
     private static void refreshIfNeeded() {
         long now = System.currentTimeMillis();
         if (now - lastRefresh < CACHE_TIME_MILLIS || !REFRESHING.compareAndSet(false, true)) return;
@@ -56,11 +69,13 @@ public final class ItemPriceResolver {
                 Map<String, Double> npc = parseNpcPrices(itemsRequest.join());
                 Map<String, Double> bazaar = parseBazaarPrices(bazaarRequest.join());
                 Map<String, Double> bin = parseLowestBin(binRequest.join());
+                Map<String, String> names = parseNames(itemsRequest.join());
                 synchronized (NPC_PRICES) { NPC_PRICES.clear(); NPC_PRICES.putAll(npc); }
                 synchronized (BAZAAR_PRICES) { BAZAAR_PRICES.clear(); BAZAAR_PRICES.putAll(bazaar); }
                 synchronized (LOWEST_BIN_PRICES) { LOWEST_BIN_PRICES.clear(); LOWEST_BIN_PRICES.putAll(bin); }
+                synchronized (NAME_TO_ID) { NAME_TO_ID.clear(); NAME_TO_ID.putAll(names); }
                 lastRefresh = System.currentTimeMillis();
-                System.out.println("[TastyFish] Price cache refreshed: " + npc.size() + " NPC, " + bazaar.size() + " Bazaar, " + bin.size() + " LBIN.");
+                System.out.println("[TastyFish] Price cache refreshed: " + npc.size() + " NPC, " + bazaar.size() + " Bazaar, " + bin.size() + " LBIN, " + names.size() + " names.");
             } catch (Throwable error) {
                 System.err.println("[TastyFish] Failed to refresh item prices: " + rootMessage(error));
             }
@@ -89,6 +104,21 @@ public final class ItemPriceResolver {
             try {
                 double price = item.get("npc_sell_price").getAsDouble();
                 if (price > 0) result.put(item.get("id").getAsString(), price);
+            } catch (Exception ignored) { }
+        }
+        return result;
+    }
+
+    private static Map<String, String> parseNames(HttpResponse<String> response) {
+        Map<String, String> result = new HashMap<>();
+        JsonObject root = JsonParser.parseString(response.body()).getAsJsonObject();
+        if (!root.has("items") || !root.get("items").isJsonArray()) return result;
+        for (JsonElement element : root.getAsJsonArray("items")) {
+            if (!element.isJsonObject()) continue;
+            JsonObject item = element.getAsJsonObject();
+            if (!item.has("id") || !item.has("name")) continue;
+            try {
+                result.put(normalizeName(item.get("name").getAsString()), item.get("id").getAsString());
             } catch (Exception ignored) { }
         }
         return result;
@@ -124,6 +154,11 @@ public final class ItemPriceResolver {
             } catch (Exception ignored) { }
         }
         return result;
+    }
+
+    private static String normalizeName(String value) {
+        return value == null ? "" : value.replaceAll("§[0-9a-fk-or]", "")
+            .replace("✦", "").replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
     }
 
     private static String rootMessage(Throwable error) {
