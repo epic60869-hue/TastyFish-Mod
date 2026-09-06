@@ -9,12 +9,14 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class SkysoftSessionReader {
     private static final String FARMING = "FARMING";
     private static final String PROFIT_TRACKER_CLASS = "com.skysoft.features.profit.ProfitTracker";
     private static final String TARGET_CLASS = "com.skysoft.features.profit.ProfitTrackerTarget";
     private static final String PRESET_CLASS = "com.skysoft.features.profit.ProfitTrackerPreset";
+    private static final String ITEM_CUSTOMIZATIONS_CLASS = "com.skysoft.features.profit.ProfitTrackerItemCustomizations";
 
     private static boolean methodDebugPrinted = false;
 
@@ -44,26 +46,31 @@ public final class SkysoftSessionReader {
             long actions = longField(stats, "actions");
             double coins = doubleField(stats, "coins");
 
-            // Match Skysoft's own Known Profit valuation exactly. Do not use
-            // TastyFish's independent ItemPriceResolver as a fallback because
-            // that can value items Skysoft does not include in Known Profit.
             Object target = createFarmingTarget();
+            Set<String> trackedItemIds = skysoftTrackedItemIds(trackerClass, tracker, target);
+
+            // Skysoft's HUD calculates Total Profit from the same sessionStats,
+            // but only includes items that are currently tracked and not excluded.
+            // Reproduce that exact selection before applying ProfitTracker.unitValue.
             double itemValue = 0.0;
             long valuedItems = 0L;
             long pricedItemTypes = 0L;
-            boolean hadItems = !items.isEmpty();
+            boolean hadTrackedItems = false;
 
             for (Map.Entry<String, Long> entry : items.entrySet()) {
                 String itemId = entry.getKey();
                 long count = entry.getValue();
                 if (count <= 0) continue;
+                if (!trackedItemIds.contains(itemId)) continue;
+                if (skysoftIsExcluded(target, itemId)) continue;
 
+                hadTrackedItems = true;
                 Double unitValue = null;
                 try {
                     unitValue = skysoftUnitValue(trackerClass, tracker, target, itemId);
                 } catch (Throwable ignored) {
-                    // Skysoft could not value this item. Known Profit does not
-                    // invent a value for it, so leave it out of the calculation.
+                    // Match Skysoft HUD: an unpriceable item has a null display
+                    // value and is not included in the Total Profit sum.
                 }
 
                 if (unitValue != null && Double.isFinite(unitValue) && unitValue > 0.0) {
@@ -73,12 +80,15 @@ public final class SkysoftSessionReader {
                 }
             }
 
-            // If Skysoft has tracked items but none are currently priceable,
+            // If Skysoft has tracked items but none can currently be priced,
             // do not upload a fabricated zero.
-            if (hadItems && pricedItemTypes == 0L) {
+            if (hadTrackedItems && pricedItemTypes == 0L) {
                 return Snapshot.invalid();
             }
 
+            // This is the same formula used by Skysoft's ProfitTracker HUD:
+            // revenue = tracked item values + stats.coins
+            // profit  = revenue - tracked coin costs
             double coinCosts = costs.getOrDefault("Coins", 0L).doubleValue();
             double profit = itemValue + coins - coinCosts;
 
@@ -149,6 +159,70 @@ public final class SkysoftSessionReader {
         }
 
         throw new NoSuchMethodException("Could not construct Skysoft ProfitTrackerTarget.FARMING");
+    }
+
+    private static Set<String> skysoftTrackedItemIds(
+        Class<?> trackerClass,
+        Object tracker,
+        Object target
+    ) throws ReflectiveOperationException {
+        List<Method> candidates = new ArrayList<>();
+        for (Method method : allMethods(trackerClass)) {
+            String name = method.getName();
+            if (!(name.equals("trackedItemIds") || name.startsWith("trackedItemIds"))) continue;
+            if (method.getParameterCount() != 1) continue;
+            Class<?> parameter = method.getParameterTypes()[0];
+            if (!parameter.isAssignableFrom(target.getClass()) && !target.getClass().isAssignableFrom(parameter)) continue;
+            candidates.add(method);
+        }
+
+        Throwable lastFailure = null;
+        for (Method method : candidates) {
+            try {
+                method.setAccessible(true);
+                Object receiver = Modifier.isStatic(method.getModifiers()) ? null : tracker;
+                Object result = method.invoke(receiver, target);
+                if (result instanceof Set<?> raw) {
+                    java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+                    for (Object value : raw) {
+                        if (value instanceof String id) ids.add(id);
+                    }
+                    return ids;
+                }
+            } catch (InvocationTargetException invocation) {
+                lastFailure = invocation.getCause() == null ? invocation : invocation.getCause();
+            } catch (Throwable failure) {
+                lastFailure = failure;
+            }
+        }
+
+        if (lastFailure != null) {
+            throw new ReflectiveOperationException("Skysoft trackedItemIds invocation failed", lastFailure);
+        }
+        throw new NoSuchMethodException("No compatible ProfitTracker.trackedItemIds method found");
+    }
+
+    private static boolean skysoftIsExcluded(Object target, String itemId) throws ReflectiveOperationException {
+        Class<?> customizationClass = Class.forName(ITEM_CUSTOMIZATIONS_CLASS);
+        Object customization = getKotlinObjectInstance(customizationClass);
+
+        for (Method method : allMethods(customizationClass)) {
+            String name = method.getName();
+            if (!(name.equals("isExcluded") || name.startsWith("isExcluded"))) continue;
+            if (method.getParameterCount() != 2) continue;
+            Class<?>[] parameters = method.getParameterTypes();
+            boolean targetCompatible = parameters[0].isAssignableFrom(target.getClass())
+                || target.getClass().isAssignableFrom(parameters[0]);
+            boolean stringCompatible = parameters[1].isAssignableFrom(String.class) || parameters[1] == Object.class;
+            if (!targetCompatible || !stringCompatible) continue;
+
+            method.setAccessible(true);
+            Object receiver = Modifier.isStatic(method.getModifiers()) ? null : customization;
+            Object result = method.invoke(receiver, target, itemId);
+            return result instanceof Boolean && (Boolean) result;
+        }
+
+        throw new NoSuchMethodException("No compatible ProfitTrackerItemCustomizations.isExcluded method found");
     }
 
     private static Double skysoftUnitValue(
@@ -316,7 +390,7 @@ public final class SkysoftSessionReader {
         }
 
         public static Snapshot invalid() {
-            return new Snapshot(Map.of(), Map.of(), 0L, 0L, 0.0, 0.0, 0L, false);
+            return new Snapshot(Map.of(), Map.of(), 0L, 0L, 0.0, 0L, 0L, false);
         }
     }
 }
