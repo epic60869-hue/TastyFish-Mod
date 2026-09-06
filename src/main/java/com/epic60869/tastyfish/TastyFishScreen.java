@@ -19,11 +19,11 @@ public final class TastyFishScreen extends Screen {
 
     @Override protected void init() {
         if (editor) {
-            addRenderableWidget(Button.builder(Component.literal("Done"), b -> minecraft.setScreen(new TastyFishScreen(config)))
+            addRenderableWidget(Button.builder(Component.literal("Done"), b -> minecraft.gui.setScreen(new TastyFishScreen(config)))
                 .bounds(width / 2 - 50, height - 32, 100, 20).build());
             return;
         }
-        addRenderableWidget(Button.builder(Component.literal("GUI Editor"), b -> minecraft.setScreen(new TastyFishScreen(config, true)))
+        addRenderableWidget(Button.builder(Component.literal("GUI Editor"), b -> minecraft.gui.setScreen(new TastyFishScreen(config, true)))
             .bounds(width / 2 - 60, height / 2 - 10, 120, 20).build());
         addRenderableWidget(Button.builder(Component.literal("Reset Farming Data"), b -> FarmingProfitTracker.get().reset())
             .bounds(width / 2 - 60, height / 2 + 16, 120, 20).build());
