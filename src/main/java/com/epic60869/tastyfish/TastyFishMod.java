@@ -1,12 +1,10 @@
 package com.epic60869.tastyfish;
 
-import com.mojang.brigadier.CommandDispatcher;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.Minecraft;
-import net.minecraft.network.chat.Component;
 
 import java.nio.file.Path;
 import java.util.UUID;
@@ -27,6 +25,7 @@ public final class TastyFishMod implements ClientModInitializer {
 
         FarmingProfitTracker.get().register();
         FarmingProfitHud.register(config);
+        TastyFishRngHud.register(config);
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
         registerCommands();
         System.out.println("[TastyFish] Standalone farming tracker loaded. SkySoft is optional and not required.");
@@ -69,13 +68,6 @@ public final class TastyFishMod implements ClientModInitializer {
 
         String username = minecraft.getUser().getName();
         UUID uuid = minecraft.getUser().getProfileId();
-        uploader.upload(
-            config,
-            username,
-            uuid == null ? "" : uuid.toString(),
-            "",
-            sessionId,
-            snapshot
-        );
+        uploader.upload(config, username, uuid == null ? "" : uuid.toString(), "", sessionId, snapshot);
     }
 }
