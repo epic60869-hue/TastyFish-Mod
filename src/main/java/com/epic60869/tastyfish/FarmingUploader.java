@@ -8,13 +8,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class FarmingUploader {
     private static final Gson GSON = new Gson();
-    private static final String MOD_VERSION = "1.0.7";
+    private static final String MOD_VERSION = "1.1.0";
     private static final long AUTH_COOLDOWN_MS = 30_000L;
     private static final long AUTH_RATE_LIMIT_BACKOFF_MS = 60_000L;
     private static final long MAX_AUTH_BACKOFF_MS = 10 * 60_000L;
@@ -24,14 +23,13 @@ public final class FarmingUploader {
     private volatile String tokenUsername;
     private volatile String tokenUuid;
     private volatile String tokenSessionId;
-    private volatile String baselinedSessionId;
     private volatile long authBlockedUntil;
     private volatile long authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
     private final AtomicBoolean authenticationInProgress = new AtomicBoolean(false);
     private final AtomicBoolean updateInProgress = new AtomicBoolean(false);
 
     public void upload(TastyFishConfig config, String username, String uuid, String profile, String sessionId,
-                       SkysoftSessionReader.Snapshot snapshot) {
+                       FarmingSessionReader.Snapshot snapshot) {
         if (!config.enabled || config.endpoint.isBlank() || !snapshot.valid()) return;
         if (username == null || username.isBlank() || uuid == null || uuid.isBlank() || sessionId == null || sessionId.isBlank()) return;
 
@@ -45,7 +43,7 @@ public final class FarmingUploader {
     }
 
     private void authenticate(TastyFishConfig config, String username, String uuid, String sessionId,
-                              String profile, SkysoftSessionReader.Snapshot snapshot) {
+                              String profile, FarmingSessionReader.Snapshot snapshot) {
         long now = System.currentTimeMillis();
         if (now < authBlockedUntil || !authenticationInProgress.compareAndSet(false, true)) return;
 
@@ -80,10 +78,6 @@ public final class FarmingUploader {
                         authBackoffMs = AUTH_RATE_LIMIT_BACKOFF_MS;
                         authBlockedUntil = System.currentTimeMillis() + AUTH_COOLDOWN_MS;
                         System.out.println("[TastyFish] Farming authentication successful.");
-
-                        // Do not discard the first valid Skysoft snapshot. Upload it
-                        // immediately after authentication so the leaderboard starts
-                        // counting from the first value available after game launch.
                         if (snapshot != null) {
                             sendCumulativeUpdate(config, username, uuid, profile, sessionId, snapshot, false);
                         }
@@ -116,7 +110,7 @@ public final class FarmingUploader {
     }
 
     private void sendCumulativeUpdate(TastyFishConfig config, String username, String uuid, String profile,
-                                      String sessionId, SkysoftSessionReader.Snapshot snapshot, boolean retry) {
+                                      String sessionId, FarmingSessionReader.Snapshot snapshot, boolean retry) {
         if (!updateInProgress.compareAndSet(false, true)) return;
 
         JsonObject root = new JsonObject();
@@ -124,8 +118,6 @@ public final class FarmingUploader {
         root.addProperty("uuid", uuid);
         root.addProperty("profile", profile == null ? "" : profile);
         root.addProperty("preset", "FARMING");
-        // IMPORTANT: The backend owns delta calculation/deduplication. Always send
-        // Skysoft's cumulative session totals rather than a client-side delta.
         root.addProperty("profit", snapshot.profit());
         root.addProperty("activeMillis", snapshot.activeMillis());
         root.addProperty("actions", snapshot.actions());
@@ -137,7 +129,7 @@ public final class FarmingUploader {
     }
 
     private void sendJson(TastyFishConfig config, JsonObject root, String username, String uuid, String profile,
-                          String sessionId, SkysoftSessionReader.Snapshot snapshot, boolean retry) {
+                          String sessionId, FarmingSessionReader.Snapshot snapshot, boolean retry) {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(config.endpoint))
             .timeout(Duration.ofSeconds(15))
