@@ -17,6 +17,7 @@ public final class TastyFishConfig {
     public boolean farmingRngBackground = false;
     public int farmingRngX = 8;
     public int farmingRngY = 8;
+    public float farmingRngScale = 1.0f;
 
     public static TastyFishConfig load(Path path) {
         try {
@@ -24,6 +25,7 @@ public final class TastyFishConfig {
             TastyFishConfig c = GSON.fromJson(Files.readString(path, StandardCharsets.UTF_8), TastyFishConfig.class);
             if (c == null) c = new TastyFishConfig();
             if (c.uploadIntervalSeconds < 10) c.uploadIntervalSeconds = 10;
+            c.farmingRngScale = Math.max(0.5f, Math.min(3.0f, c.farmingRngScale));
             return c;
         } catch (Exception e) { System.err.println("[TastyFish] Failed to load config: " + e.getMessage()); return new TastyFishConfig(); }
     }
