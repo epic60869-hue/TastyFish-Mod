@@ -20,16 +20,21 @@ public final class FarmingRngTracker {
         "(?i)(?:you (?:found|dropped|got)|you received|drop(?:ped)?[: ])\\s*(?:an? |some )?(?<item>.+?)(?:!|$)"
     );
     private static final Pattern QUANTITY = Pattern.compile("(?i)^(?:x(?<x1>\\d+)\\s+|(?<x2>\\d+)x\\s+)(?<item>.+)$");
+
     private static final Set<String> DROPS = Set.of(
         "Cornucopia", "Carrot Zest", "Deepfries", "Aggourdian", "Cane Knot", "Melon Juice", "Cactus Flower",
         "Designer Coffee Beans", "Feastfungus", "Botroot", "Salted Sunflower Seeds", "Crystalized Moonlight",
-        "Floral Gelatin", "Cropie", "Squash", "Fermento", "Burrowing Spores", "Overgrown Grass", "Green Bandana",
+        "Floral Gelatin", "Helianthus", "Seasoning",
+        "Cropie", "Squash", "Fermento", "Burrowing Spores", "Overgrown Grass", "Green Bandana",
         "Dedication IV", "Dedication 4", "Flowering Bouquet", "Rooted Spores", "Fruit Bowl", "Atmospheric Filter",
-        "Beady Eyes", "Clipped Wings", "Mantid Claw", "Wriggling Larva", "Locust Larva", "Squeaky Toy",
-        "Squeaky Mousemat", "Vermin Vaporizer", "Synthesis", "Evergreen", "Quickdraw", "Hypercharge", "Fire in a Bottle",
-        "Iridium", "Overclocker 3000", "Rabbit Hat", "Lucky Clover Core", "Bulky Stone", "Turbo-Wheat V",
-        "Turbo-Carrot V", "Turbo-Potato V", "Turbo-Pumpkin V", "Turbo-Melon V", "Turbo-Cocoa V", "Turbo-Cactus V",
-        "Turbo-Mushrooms V", "Turbo-Cane V", "Turbo-Warts V", "Cultivating X", "Cultivating 10", "Seasoning"
+        "Beady Eyes", "Chirping Stereo", "Clipped Wings", "Bookworm's Favorite Book", "Mantid Claw", "Wriggling Larva",
+        "Locust Larva", "Squeaky Toy", "Squeaky Mousemat", "Vermin Vaporizer", "Vermin Vaporizer Chip",
+        "Pesterminator I", "Slug Pet", "Rat Pet", "Synthesis", "Synthesis Chip", "Evergreen", "Evergreen Chip",
+        "Quickdraw", "Quickdraw Chip", "Hypercharge", "Hypercharge Chip", "Fire in a Bottle", "Iridium",
+        "Overclocker 3000", "Rabbit Hat", "Lucky Clover Core", "Bulky Stone", "Rarefinder Chip", "Cropshot Chip",
+        "Sowledge Chip", "Mechamind Chip", "Overdrive Chip", "Sunset I",
+        "Turbo-Wheat V", "Turbo-Carrot V", "Turbo-Potato V", "Turbo-Pumpkin V", "Turbo-Melon V", "Turbo-Cocoa V",
+        "Turbo-Cactus V", "Turbo-Mushrooms V", "Turbo-Cane V", "Turbo-Warts V", "Cultivating X", "Cultivating 10"
     );
 
     private volatile Drop active;
@@ -37,6 +42,7 @@ public final class FarmingRngTracker {
     public static FarmingRngTracker get() { return INSTANCE; }
 
     public void register() {
+        ItemPriceResolver.warmup();
         ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> handle(message));
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> handle(message));
     }
@@ -56,8 +62,17 @@ public final class FarmingRngTracker {
         String raw = message.getString().replaceAll("§[0-9a-fk-or]", "").trim();
         Parsed parsed = parse(raw);
         if (parsed == null) return;
-        long unitPrice = "Seasoning".equalsIgnoreCase(parsed.name()) ? -1L : Math.round(ItemPriceResolver.valueByName(parsed.name()));
-        active = new Drop(parsed.amount(), parsed.name(), rarity(raw), unitPrice, System.currentTimeMillis() + SHOW_MILLIS);
+
+        long shownUntil = System.currentTimeMillis() + SHOW_MILLIS;
+        if ("Seasoning".equalsIgnoreCase(parsed.name())) {
+            active = new Drop(parsed.amount(), parsed.name(), rarity(raw), -1L, shownUntil);
+            return;
+        }
+
+        // Resolve off-thread and only publish the drop once the live market cache is available.
+        ItemPriceResolver.valueByNameAsync(parsed.name()).thenAccept(price ->
+            active = new Drop(parsed.amount(), parsed.name(), rarity(raw), Math.round(price), shownUntil)
+        );
     }
 
     private Parsed parse(String raw) {
@@ -66,22 +81,24 @@ public final class FarmingRngTracker {
         if (match.find()) item = match.group("item").trim();
         else {
             String lower = raw.toLowerCase(Locale.ROOT);
-            if (!lower.contains("rare drop") && !lower.contains("rngesus")) return null;
+            if (!lower.contains("rare drop") && !lower.contains("rngesus") && !lower.contains("rare crop")) return null;
             Matcher older = OLDER_DROP.matcher(raw);
             if (!older.find()) return null;
             item = older.group("item").trim();
         }
-        item = item.replaceAll("\\s*\\(\\+[^)]*\\)\\s*$", "").replaceAll("!$", "").trim();
+
+        item = item.replaceAll("\\s*\\(\\+[^)]*\\)\\s*$", "")
+            .replaceAll("!$", "").trim();
         int amount = 1;
         Matcher quantity = QUANTITY.matcher(item);
         if (quantity.matches()) {
             amount = parseInt(quantity.group("x1"), quantity.group("x2"));
             item = quantity.group("item").trim();
         }
+
         for (String known : DROPS) {
-            if (item.equalsIgnoreCase(known) || item.toLowerCase(Locale.ROOT).contains(known.toLowerCase(Locale.ROOT))) {
+            if (item.equalsIgnoreCase(known) || item.toLowerCase(Locale.ROOT).contains(known.toLowerCase(Locale.ROOT)))
                 return new Parsed(amount, known);
-            }
         }
         return null;
     }
