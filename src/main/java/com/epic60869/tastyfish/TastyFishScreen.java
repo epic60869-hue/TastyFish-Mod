@@ -9,7 +9,7 @@ import net.minecraft.network.chat.Component;
 /** Main /tf GUI plus a safe hover-to-drag HUD editor. */
 public final class TastyFishScreen extends Screen {
     private final TastyFishConfig config;
-    private boolean editor;
+    private final boolean editor;
     private String dragging;
 
     public TastyFishScreen(TastyFishConfig config) {
@@ -25,20 +25,15 @@ public final class TastyFishScreen extends Screen {
     @Override
     protected void init() {
         if (editor) {
-            addRenderableWidget(Button.builder(Component.literal("Done"), button -> {
-                minecraft.gui.setScreen(new TastyFishScreen(config));
-            }).bounds(width / 2 - 50, height - 32, 100, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("Done"), button -> minecraft.gui.setScreen(new TastyFishScreen(config)))
+                .bounds(width / 2 - 50, height - 32, 100, 20).build());
             return;
         }
 
-        addRenderableWidget(Button.builder(Component.literal("GUI Editor"), button -> {
-            minecraft.gui.setScreen(new TastyFishScreen(config, true));
-        }).bounds(width / 2 - 60, height / 2 - 10, 120, 20).build());
-
-        addRenderableWidget(Button.builder(Component.literal("Reset Farming Data"), button -> {
-            FarmingProfitTracker.get().reset();
-        }).bounds(width / 2 - 60, height / 2 + 16, 120, 20).build());
-
+        addRenderableWidget(Button.builder(Component.literal("GUI Editor"), button -> minecraft.gui.setScreen(new TastyFishScreen(config, true)))
+            .bounds(width / 2 - 60, height / 2 - 10, 120, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("Reset Farming Data"), button -> FarmingProfitTracker.get().reset())
+            .bounds(width / 2 - 60, height / 2 + 16, 120, 20).build());
         addRenderableWidget(Button.builder(Component.literal("Close"), button -> onClose())
             .bounds(width / 2 - 60, height / 2 + 42, 120, 20).build());
     }
@@ -56,12 +51,10 @@ public final class TastyFishScreen extends Screen {
         graphics.centeredText(font, "Hover an element, then drag it. Empty space does nothing.", width / 2, 27, 0xFFAAAAAA);
         graphics.centeredText(font, "Release the mouse to place it.", width / 2, 39, 0xFFAAAAAA);
 
-        boolean profitHovered = mouseX >= FarmingProfitHud.x() && mouseX <= FarmingProfitHud.x() + FarmingProfitHud.width()
-            && mouseY >= FarmingProfitHud.y() && mouseY <= FarmingProfitHud.y() + FarmingProfitHud.height();
+        boolean profitHovered = isOverProfit(mouseX, mouseY);
         FarmingProfitHud.renderPreview(graphics, FarmingProfitHud.x(), FarmingProfitHud.y(), profitHovered || "profit".equals(dragging));
 
-        boolean rngHovered = mouseX >= TastyFishRngHud.x() && mouseX <= TastyFishRng.x() + TastyFishRngHud.width()
-            && mouseY >= TastyFishRngHud.y() && mouseY <= TastyFishRngHud.y() + TastyFishRngHud.height();
+        boolean rngHovered = isOverRng(mouseX, mouseY);
         TastyFishRngHud.renderPreview(graphics, TastyFishRngHud.x(), TastyFishRngHud.y(), rngHovered || "rng".equals(dragging));
     }
 
