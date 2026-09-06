@@ -13,14 +13,13 @@ public final class TastyFishMod implements ClientModInitializer {
     private TastyFishConfig config;
     private final FarmingUploader uploader = new FarmingUploader();
     private String sessionId = FarmingUploader.newSessionId();
-    private long lastUploadMillis = 0L;
-    private boolean wasConnected = false;
+    private long lastUploadMillis;
+    private boolean connected;
 
     @Override
     public void onInitializeClient() {
-        Path configPath = Minecraft.getInstance().gameDirectory.toPath()
-            .resolve("config")
-            .resolve("tastyfish-mod.json");
+        Minecraft minecraft = Minecraft.getInstance();
+        Path configPath = minecraft.gameDirectory.toPath().resolve("config").resolve("tastyfish-mod.json");
         config = TastyFishConfig.load(configPath);
 
         FarmingProfitTracker.get().register();
@@ -28,7 +27,8 @@ public final class TastyFishMod implements ClientModInitializer {
         TastyFishRngHud.register(config);
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
         registerCommands();
-        System.out.println("[TastyFish] Standalone farming tracker loaded. SkySoft is optional and not required.");
+
+        System.out.println("[TastyFish] Standalone farming tracker loaded for Minecraft 26.2.");
     }
 
     private void registerCommands() {
@@ -39,22 +39,22 @@ public final class TastyFishMod implements ClientModInitializer {
     }
 
     private int openMenu() {
-        Minecraft.getInstance().execute(() -> Minecraft.getInstance().gui.setScreen(new TastyFishScreen(config)));
+        Minecraft.getInstance().execute(() -> Minecraft.getInstance().setScreen(new TastyFishScreen(config)));
         return 1;
     }
 
     private void tick(Minecraft minecraft) {
-        FarmingProfitTracker.get().tick(minecraft);
+        FarmingProfitTracker tracker = FarmingProfitTracker.get();
+        tracker.tick(minecraft);
 
-        boolean connected = minecraft.player != null;
-        if (!connected) {
-            wasConnected = false;
+        if (minecraft.player == null) {
+            connected = false;
             return;
         }
 
-        if (!wasConnected) {
+        if (!connected) {
+            connected = true;
             lastUploadMillis = 0L;
-            wasConnected = true;
             sessionId = FarmingUploader.newSessionId();
             TastyFishVersionChecker.check(minecraft);
         }
@@ -63,7 +63,7 @@ public final class TastyFishMod implements ClientModInitializer {
         if (now - lastUploadMillis < config.uploadIntervalSeconds * 1000L) return;
         lastUploadMillis = now;
 
-        FarmingSessionReader.Snapshot snapshot = FarmingSessionReader.read();
+        FarmingProfitTracker.Snapshot snapshot = tracker.snapshot();
         if (!snapshot.valid()) return;
 
         String username = minecraft.getUser().getName();
