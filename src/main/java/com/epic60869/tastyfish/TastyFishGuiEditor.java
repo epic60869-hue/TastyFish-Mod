@@ -18,8 +18,10 @@ public final class TastyFishGuiEditor extends Screen {
     }
 
     @Override protected void init() {
-        addRenderableWidget(Button.builder(Component.literal("Reset RNG"), b -> TastyFishRngHud.setPosition(8, 8))
-            .bounds(12, 42, 90, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("Reset RNG"), b -> {
+            TastyFishRngHud.setPosition(8, 8);
+            TastyFishRngHud.setScale(1.0f);
+        }).bounds(12, 42, 90, 20).build());
         addRenderableWidget(Button.builder(Component.literal("Done"), b -> onClose())
             .bounds(width - 82, height - 28, 70, 20).build());
     }
@@ -28,8 +30,12 @@ public final class TastyFishGuiEditor extends Screen {
         g.fill(0, 0, width, height, 0xB0101014);
         g.fill(8, 8, width - 8, height - 38, 0x40101014);
         g.text(font, "TastyFish HUD Editor", 14, 15, 0xFFFFFFFF, true);
-        g.text(font, "Drag the Farming RNG overlay. Drop it where you want it.", 14, 28, 0xFFAAAAAA, false);
+        g.text(font, "Drag the Farming RNG overlay. Scroll over it to change text size.", 14, 28, 0xFFAAAAAA, false);
         TastyFishRngHud.renderPreview(g, config.farmingRngX, config.farmingRngY);
+        g.fill(Math.max(0, config.farmingRngX - 6), Math.max(0, config.farmingRngY - 6),
+            Math.min(width, config.farmingRngX + TastyFishRngHud.width()),
+            Math.min(height - 38, config.farmingRngY + TastyFishRngHud.height()), 0x12000000);
+        g.text(font, "Scale: " + TastyFishRngHud.scaleText(), 14, height - 48, 0xFFCCCCCC, false);
         super.extractRenderState(g, mouseX, mouseY, delta);
     }
 
@@ -61,6 +67,14 @@ public final class TastyFishGuiEditor extends Screen {
             return true;
         }
         return super.mouseReleased(event);
+    }
+
+    @Override public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        if (hitHud(mouseX, mouseY) && verticalAmount != 0) {
+            TastyFishRngHud.changeScale(verticalAmount > 0 ? 0.1f : -0.1f);
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
     }
 
     private boolean hitHud(double x, double y) {
