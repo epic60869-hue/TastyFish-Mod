@@ -9,6 +9,8 @@ import java.util.Locale;
 
 public final class TastyFishRngHud {
     private static final Identifier ID = Identifier.fromNamespaceAndPath("tastyfish-mod", "farming_rng");
+    private static final int BASE_WIDTH = 230;
+    private static final int BASE_HEIGHT = 42;
     private static TastyFishConfig config;
     private TastyFishRngHud() {}
 
@@ -24,8 +26,9 @@ public final class TastyFishRngHud {
         render(graphics, drop, config.farmingRngX, config.farmingRngY);
     }
 
-    public static int width() { return 230; }
-    public static int height() { return 48; }
+    public static int width() { return Math.max(1, Math.round(BASE_WIDTH * scale())); }
+    public static int height() { return Math.max(1, Math.round(BASE_HEIGHT * scale())); }
+    public static float scale() { return config == null ? 1.0f : config.farmingRngScale; }
 
     public static void setPosition(int x, int y) {
         if (config == null) return;
@@ -34,16 +37,43 @@ public final class TastyFishRngHud {
         save();
     }
 
+    public static void setScale(float value) {
+        if (config == null) return;
+        config.farmingRngScale = Math.max(0.5f, Math.min(3.0f, Math.round(value * 10.0f) / 10.0f));
+        save();
+    }
+
+    public static void changeScale(float amount) {
+        setScale(scale() + amount);
+    }
+
+    public static String scaleText() {
+        return String.format(Locale.ROOT, "%.1fx", scale());
+    }
+
     public static void renderPreview(GuiGraphicsExtractor graphics, int x, int y) {
         render(graphics, new FarmingRngTracker.Drop(1, "Overgrown Grass", "RARE DROP", 125000, Long.MAX_VALUE), x, y);
     }
 
     private static void render(GuiGraphicsExtractor graphics, FarmingRngTracker.Drop drop, int x, int y) {
-        if (config != null && config.farmingRngBackground) graphics.fill(x - 5, y - 5, x + width(), y + height(), 0xB5000000);
-        graphics.text(Minecraft.getInstance().font, drop.rarity(), x, y, 0xFFFFFF55, true);
-        graphics.text(Minecraft.getInstance().font, (drop.amount() > 1 ? drop.amount() + "x " : "") + drop.name(), x, y + 15, 0xFFFFFFFF, true);
-        String price = drop.unitPrice() < 0 ? "—" : formatCoins(drop.unitPrice() * drop.amount());
-        graphics.text(Minecraft.getInstance().font, price.equals("—") ? price : price + " coins", x, y + 30, 0xFFAAAAAA, true);
+        float s = scale();
+        graphics.pose().pushPose();
+        graphics.pose().translate(x, y, 0);
+        graphics.pose().scale(s, s, 1.0f);
+
+        if (config != null && config.farmingRngBackground) {
+            graphics.fill(-6, -5, BASE_WIDTH, BASE_HEIGHT, 0xB5101014);
+            graphics.fill(0, 0, 3, BASE_HEIGHT, 0xFFFFD84D);
+        }
+
+        String item = (drop.amount() > 1 ? drop.amount() + "x " : "") + drop.name();
+        String price = drop.unitPrice() < 0 ? "—" : formatCoins(drop.unitPrice() * drop.amount()) + " coins";
+
+        graphics.text(Minecraft.getInstance().font, drop.rarity(), 9, 2, 0xFFFFFF55, true);
+        graphics.text(Minecraft.getInstance().font, item, 9, 15, 0xFFFFFFFF, true);
+        graphics.text(Minecraft.getInstance().font, price, 9, 29, 0xFFAAAAAA, false);
+
+        graphics.pose().popPose();
     }
 
     private static String formatCoins(long value) {
